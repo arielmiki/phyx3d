@@ -31,3 +31,4 @@ jobs:
         run: |
           node dist/cli.js check examples/phone_stand.stl --no-save
           node dist/cli.js mech examples/mechanisms/rover.mech.json --no-save
+          node dist/cli.js interlock examples/interlocks/bayonet.interlock.json examples/interlocks/pressfit.interlock.json --no-save

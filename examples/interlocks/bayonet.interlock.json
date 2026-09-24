@@ -1,0 +1,10 @@
+{
+ "name": "bayonet cap",
+ "parts": [
+  { "id": "socket", "file": "bayonet_socket.stl" },
+  { "id": "plug", "file": "bayonet_plug.stl" }
+ ],
+ "interlocks": [
+  { "name": "bayonet", "type": "bayonet", "moving": "plug", "axis": [0, 0, -1], "depth": 6, "angle": -30, "center": [0, 0, 0], "hold": "none" }
+ ]
+}

@@ -19,9 +19,10 @@ diagrams below are PlantUML: sources in [`docs/diagrams/`](diagrams) (`*.puml`),
 | `printability.ts` | Mesh health, bed fit, overhang clusters (bridge vs. cantilever via voxel support test), islands, BVH thin-wall rays, estimates |
 | `stability.ts` | Footprint / support polygon, centre of mass, tip angle, height-to-base ratio, per-layer slenderness, "printed-so-far" lean |
 | `warp.ts` | Heuristic warp-risk score |
-| `fea.ts` | Linear-elastic FEA on voxels: 8-node hexahedra, matrix-free Jacobi-PCG, stresses at Gauss points, along-layer vs. across-layer failure using the build direction |
+| `fea.ts` | Linear-elastic FEA on voxels: 8-node hexahedra, matrix-free Jacobi-PCG, stresses at Gauss points, along-layer vs. across-layer failure using the build direction; force, acceleration and prescribed-displacement loads (with reaction forces) |
 | `physics.ts` | Rapier rigid-body scenarios: drop (with impact → FEA), tilt, push, stack |
 | `mechanism.ts` | Multi-body simulation from a `.mech.json`: joints, motor presets, explicit torque controllers with gearbox inertia, adaptive time step, metrics |
+| `interlock.ts` | Interlocking parts: type → motion family, assembly-path sweeps with BVH mesh-vs-mesh collision (three-mesh-bvh), fit, escapes and free play, catch engagement, press-fit interference, wrong-way assembly. See [INTERLOCKS.md](INTERLOCKS.md) |
 | `expr.ts` | Safe expression compiler (Pratt parser, no `eval`) for motion programs, with live sensor variables |
 | `gcode.ts`, `gcodecheck.ts` | Toolpath parser (G0/G1/G2/G3, relative/absolute E, Bambu/Orca/Prusa feature comments) and over-air extrusion scan |
 | `render.ts`, `png.ts` | Headless software rasteriser → PNG (for agents and CI), with overlays, legends and filmstrips |
@@ -72,6 +73,13 @@ the print orientation.
   their applied impulse cannot be read back. phyx3d applies motor torques itself, so reported torques are exactly
   what was applied. Very light printed links would make that unstable, so each motor adds its gearbox's reflected
   inertia (estimated from rated torque and speed) and the time step adapts to the stiffest joint.
+- **Touching is not overlapping.** Printed parts that rest on each other share faces exactly, and exact collision
+  would call that an overlap. The interlock sweep counts a pose as overlapping only if nudging the part a hair in
+  every direction still leaves the surfaces crossing, and it skips parallel faces lying on each other. Each stop is
+  then re-found with a 20× finer nudge, so free play reads to about 0.01 mm.
+- **Displacement loads for snaps.** A snap arm always bends by the same distance, so the strength test holds the
+  pushed nodes at that displacement, moves the known part to the right-hand side, and reads the push force back
+  as the reaction.
 - **A software renderer.** Agents and CI machines rarely have a GPU; a small rasteriser makes report pictures
   anywhere.
 

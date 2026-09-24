@@ -29,7 +29,7 @@ Before modelling, pin down (ask only if you can't infer a sensible default):
 3. If the part carries load: `stress_test` with realistic `fixed` + `loads` in the **design's own axes**.
    `rel` regions are the easiest: `{rel:{min:[0.85,0,0],max:[1,1,1]}}` = the far 15 % along +X.
    Pass the chosen print `rotate` too — layer direction changes the strength. Aim for safety factor ≥ 2 (≥ 3 for impact/repeated loads).
-   **Snap-fits are different:** a snap moves by a fixed distance (barb reach + clearance), not under a known force. Probe with a 1 N load at the barb with a fine mesh (`resolution: 120000`), then scale: `SF_real = minSafetyFactor × maxDeflection / travel`. Force-guessed snap FEA, especially on a coarse mesh, can be wrong by large factors either way. Lay snap springs flat on the bed where possible, so they bend along the layers.
+   **Snap-fits are different:** a snap moves by a fixed distance (barb reach + clearance), not under a known force. Test it with `displacements: [{region: <the barb>, move: [0,0,<travel>]}]` instead of `loads`, with a fine mesh (`resolution` ≥ 60000 for thin arms). You get the safety factor at that travel and `pushForces` (N, how hard it is to press). Force-guessed snap FEA can be wrong by large factors either way. Lay snap springs flat on the bed where possible, so they bend along the layers.
 4. If it must stand, stack, or survive knocks: `simulate_physics` with `tilt`, `push`, `stack` or `drop`.
 5. Optional, if Bambu Studio is installed: `slice_bambu` for exact time and filament.
 
@@ -46,6 +46,13 @@ Use `simulate_mechanism` whenever parts move relative to each other.
 4. Fix: a motor `saturated` or `p95 > 0.7 × rated` → stronger preset, shorter lever, lighter part, slower motion. Falls over → wider stance, lower body, slower gait. Veers → symmetric design or feedback. Parts collide → clearance or phase change. Then **also** run `stress_test` on the most loaded part using the motor's peak torque as the load.
 5. A walking gait that works as a starting point: trot, diagonal legs in phase, hip `A*sin(ωt+φ)`, knee `B*max(0,-cos(ωt+φ))` (lifts the foot while the leg swings forward).
 
+## 3c. Parts that lock together — dovetails, T-slots, bayonets, snaps, detents, threads, press fits
+
+Run `check_interlock` whenever two printed parts join (lids, doors, rails, caps, clips). Model every part in its **assembled position**, then give `spec: {parts:[{id, file}], interlocks:[{type, moving, against, axis}]}` + `base_dir` (or a `.interlock.json` `path`).
+- `axis` = the direction the moving part travels to go **in**. Twist types also need `depth` (push-in before turning), `angle` (sign = direction) and `center` (a point on the axis); screws need `pitch` + `turns`. Unusual motions: `insert: [{move}|{rotate, axis, about}|{screw, pitch, axis, about}]`.
+- Read: `fit` (clamped = zero clearance on opposite sides → will bind), `insertion` (jams where?), `escapes` (free play per direction; an unexpected free direction → add a stop), `engagement.net` (catch height − free play; needs ≥ 0.2 mm detent / ≥ 0.6 mm lock, in whole layers), press-fit interference (0.02–0.25 mm per side), `wrongWays` ("assembles" → add a key so it only fits one way).
+- Then check the catch's strength: `stress_test` with `displacements` = the engagement height (`needed`) at the barb.
+
 ## 4. Fix and repeat
 
 Apply the `todo` fixes in the CAD, re-export, re-test. Iterate until the verdict is `ready`, or `printable-with-care` with every remaining warning explained. Usually 2–4 rounds.
@@ -53,8 +60,8 @@ Apply the `todo` fixes in the CAD, re-export, re-test. Iterate until the verdict
 For enclosures and other multi-part assemblies, also:
 - **Fit-check against a model of what goes inside** (board, battery, device): model it with its real dimensions and
   check clearances in the assembled position, not by eye.
-- **Nudge-test locks and snaps:** move the part by the expected play (0.2–0.5 mm) and make sure the lock still holds
-  and nothing else collides.
+- **Test locks and snaps with `check_interlock`:** it measures the real free play and whether the catch still holds
+  after it, and finds paths that jam.
 - **Watch for slicer settings that break the design:** elephant's foot on the first layer, seam placement on mating
   faces, and hole shrinkage — say which settings (or compensation) the design assumes.
 

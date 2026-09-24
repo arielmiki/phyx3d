@@ -19,6 +19,13 @@ export interface LoadCase {
   loads: { region: Region; force: [number, number, number] }[];
   /** body acceleration in g (e.g. [0,0,-1] = own weight, [0,0,-50] ≈ hard drop impact) */
   acceleration?: [number, number, number];
+  /**
+   * Prescribed motion in mm: push a region by a set distance instead of a guessed force — the right
+   * way to test a snap, detent or clip, which always travels the same distance whatever it costs.
+   * Only the axes with a non-zero component are held; the others stay free (a ramp pushes one way).
+   * The report gives the force it takes (reaction) and the safety factor at that travel.
+   */
+  displacements?: { region: Region; move: [number, number, number] }[];
 }
 
 export interface FeaOptions {
@@ -41,6 +48,8 @@ export interface FeaResult {
   iterations: number;
   converged: boolean;
   droppedElements: number;
+  /** force needed for each prescribed displacement, N (x, y, z) */
+  reactions: { move: [number, number, number]; force: [number, number, number]; nodes: number }[];
 }
 
 // ---------- unit-cube element matrices ----------
@@ -220,6 +229,23 @@ export function solveFea(part: Part, lc: LoadCase, opts: FeaOptions = {}): FeaRe
   }
   for (let i = 0; i < ndof; i++) if (fixedDof[i]) f[i] = 0;
 
+  // prescribed displacements: held dofs with a value
+  const up = new Float64Array(ndof);
+  const presc: { move: [number, number, number]; dofs: number[] }[] = [];
+  for (const dsp of lc.displacements ?? []) {
+    const nodes: number[] = [];
+    for (let i = 0; i < nNodes; i++) if (inRegion(dsp.region, nodePos(nodeOfDof[i]))) nodes.push(i);
+    if (!nodes.length) throw new Error(`Displacement region ${JSON.stringify(dsp.region)} does not touch the part.`);
+    const dofs: number[] = [];
+    for (const i of nodes) for (let d = 0; d < 3; d++) {
+      if (Math.abs(dsp.move[d]) < 1e-12) continue;
+      const k = i * 3 + d;
+      if (fixedDof[k]) continue;                 // a fixed region wins
+      fixedDof[k] = 1; up[k] = dsp.move[d]; dofs.push(k);
+    }
+    presc.push({ move: dsp.move, dofs });
+  }
+
   const scale = E * h;
   const Ke = Ku;
   const ue = new Float64Array(24);
@@ -241,6 +267,25 @@ export function solveFea(part: Part, lc: LoadCase, opts: FeaOptions = {}): FeaRe
   const diag = new Float64Array(ndof);
   for (let e = 0; e < elements.length; e++) for (let a = 0; a < 24; a++) diag[edofs[e * 24 + a]] += Ke[a * 25] * scale;
   const invD = diag.map((d, i) => (fixedDof[i] || d === 0 ? 0 : 1 / d));
+  // K·u without zeroing held rows: moves prescribed motion to the right-hand side, and gives reactions
+  const kFull = (x: Float64Array, y: Float64Array) => {
+    y.fill(0);
+    for (let e = 0; e < elements.length; e++) {
+      const o = e * 24;
+      for (let a = 0; a < 24; a++) ue[a] = x[edofs[o + a]];
+      for (let a = 0; a < 24; a++) {
+        let s2 = 0;
+        const row = a * 24;
+        for (let b = 0; b < 24; b++) s2 += Ke[row + b] * ue[b];
+        y[edofs[o + a]] += s2 * scale;
+      }
+    }
+  };
+  if (presc.length) {
+    const kup = new Float64Array(ndof);
+    kFull(up, kup);
+    for (let i = 0; i < ndof; i++) if (!fixedDof[i]) f[i] -= kup[i];
+  }
 
   // PCG
   const u = new Float64Array(ndof);
@@ -251,7 +296,7 @@ export function solveFea(part: Part, lc: LoadCase, opts: FeaOptions = {}): FeaRe
   let rz = dot(r, z);
   const fNorm = Math.sqrt(dot(f, f)) || 1;
   const tol = opts.tolerance ?? 1e-6;
-  const maxIt = opts.maxIterations ?? 4000;
+  const maxIt = opts.maxIterations ?? 10000;
   let it = 0, converged = false;
   for (; it < maxIt; it++) {
     matvec(pdir, Ap);
@@ -263,6 +308,19 @@ export function solveFea(part: Part, lc: LoadCase, opts: FeaOptions = {}): FeaRe
     const beta = rzNew / rz;
     rz = rzNew;
     for (let i = 0; i < ndof; i++) pdir[i] = z[i] + beta * pdir[i];
+  }
+
+  // total displacement = solved free part + prescribed part; reactions at the pushed nodes
+  for (let i = 0; i < ndof; i++) if (up[i]) u[i] = up[i];
+  const reactions: FeaResult["reactions"] = [];
+  if (presc.length) {
+    const ku = new Float64Array(ndof);
+    kFull(u, ku);
+    for (const p of presc) {
+      const F: [number, number, number] = [0, 0, 0];
+      for (const k of p.dofs) F[k % 3] += ku[k];
+      reactions.push({ move: p.move, force: F, nodes: p.dofs.length });
+    }
   }
 
   // stresses: max over the 8 Gauss points of each element (MPa)
@@ -310,6 +368,7 @@ export function solveFea(part: Part, lc: LoadCase, opts: FeaOptions = {}): FeaRe
     iterations: it,
     converged,
     droppedElements: dropped,
+    reactions,
   };
 }
 
@@ -349,6 +408,8 @@ export type StrengthData = {
   converged: boolean;
   strengthKnockdown: number;
   hotspots: { at: [number, number, number]; safety: number; mode: string }[];
+  /** force it takes to push each prescribed displacement, N */
+  pushForces: { move: [number, number, number]; forceN: number }[];
 };
 
 export function checkStrength(part: Part, lc: LoadCase, opts: FeaOptions & { requiredSafety?: number } = {}): CheckResult<StrengthData> & { fea: FeaResult } {
@@ -376,7 +437,12 @@ export function checkStrength(part: Part, lc: LoadCase, opts: FeaOptions & { req
     message: `Safety factor ${h.safety} at (${h.at.join(", ")}) — ${h.mode === "across-layers" ? "layers would split apart here" : "material would yield/crack here"}.`,
     at: h.at,
   }));
-  if (!res.converged) findings.push({ status: "warn", message: `Solver stopped after ${res.iterations} iterations without full convergence; numbers are approximate.` });
+  for (const r of res.reactions) {
+    const L = Math.hypot(...r.move) || 1;
+    const F = Math.abs((r.force[0] * r.move[0] + r.force[1] * r.move[1] + r.force[2] * r.move[2]) / L);
+    findings.push({ status: "info", message: `Pushing ${r.move.map((v) => r2(v)).join(", ")} mm takes about ${r2(F)} N (${r2(F / 9.81)} kgf).` });
+  }
+  if (!res.converged) findings.push({ status: "warn", message: `Solver stopped after ${res.iterations} iterations without full convergence; numbers are approximate — try a lower resolution.` });
   if (res.droppedElements) findings.push({ status: "info", message: `${res.droppedElements} voxels not connected to the fixed region were ignored.` });
   const fixes: string[] = [];
   if (status !== "pass") {
@@ -389,7 +455,7 @@ export function checkStrength(part: Part, lc: LoadCase, opts: FeaOptions & { req
     id: "strength",
     title: "Strength under load",
     status,
-    summary: `Minimum safety factor ${r2(sfMin)} (need ≥ ${need}) — ${weakest?.mode === "across-layers" ? "limited by layer adhesion" : "limited by material strength"}; max deflection ${r2(res.maxDisplacement)} mm.`,
+    summary: `Minimum safety factor ${r2(sfMin)} (need ≥ ${need}) — ${weakest?.mode === "across-layers" ? "limited by layer adhesion" : "limited by material strength"}; max deflection ${r2(res.maxDisplacement)} mm${res.reactions.length ? `; pushing it takes ${res.reactions.map((r) => { const L = Math.hypot(...r.move) || 1; return `${r2(Math.abs((r.force[0] * r.move[0] + r.force[1] * r.move[1] + r.force[2] * r.move[2]) / L))} N`; }).join(" + ")}` : ""}.`,
     accuracy: "rough-guide",
     findings,
     fixes,
@@ -407,6 +473,10 @@ export function checkStrength(part: Part, lc: LoadCase, opts: FeaOptions & { req
       converged: res.converged,
       strengthKnockdown: r2(knock),
       hotspots,
+      pushForces: res.reactions.map((r) => {
+        const L = Math.hypot(...r.move) || 1;
+        return { move: r.move, forceN: r2(Math.abs((r.force[0] * r.move[0] + r.force[1] * r.move[1] + r.force[2] * r.move[2]) / L)) };
+      }),
     },
     fea: res,
   };

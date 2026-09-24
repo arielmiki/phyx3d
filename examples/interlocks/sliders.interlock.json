@@ -1,0 +1,17 @@
+{
+ "name": "slide-together examples",
+ "layerHeight": 0.2,
+ "parts": [
+  { "id": "dovetail_rail", "file": "dovetail_rail.stl" },
+  { "id": "dovetail_slider", "file": "dovetail_slider.stl" },
+  { "id": "tslot_rail", "file": "tslot_rail.stl", "position": [0, 60, 0] },
+  { "id": "tslot_slider", "file": "tslot_slider.stl", "position": [0, 60, 0] },
+  { "id": "detent_rail", "file": "detent_rail.stl", "position": [0, 120, 0] },
+  { "id": "detent_slider", "file": "detent_slider.stl", "position": [0, 120, 0] }
+ ],
+ "interlocks": [
+  { "name": "dovetail", "type": "dovetail", "moving": "dovetail_slider", "against": ["dovetail_rail"], "axis": [1, 0, 0] },
+  { "name": "T-slot", "type": "t-slot", "moving": "tslot_slider", "against": ["tslot_rail"], "axis": [1, 0, 0] },
+  { "name": "dovetail with a detent", "type": "detent", "moving": "detent_slider", "against": ["detent_rail"], "axis": [1, 0, 0] }
+ ]
+}

@@ -197,7 +197,8 @@ function hexColor(s: string | undefined, i: number): RGB {
 
 // ----------------------------------------------------------------------------- build
 
-function partMesh(p: MechPart, resolve: (file: string) => Uint8Array): Mesh {
+/** A part's mesh in assembly coordinates: its file or primitive shape, rotated then moved. */
+export function partMesh(p: Pick<MechPart, "id" | "file" | "shape" | "position" | "rotation">, resolve: (file: string) => Uint8Array): Mesh {
   let m: Mesh;
   if (p.shape && "box" in p.shape) { const [x, y, z] = p.shape.box; m = box(x, y, z, [-x / 2, -y / 2, -z / 2]); }
   else if (p.shape && "cylinder" in p.shape) {

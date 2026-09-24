@@ -96,4 +96,16 @@ describe("strength (FEA)", () => {
     expect(r.data.maxVonMises / 6).toBeGreaterThan(0.75);
     expect(r.data.maxVonMises / 6).toBeLessThan(1.6);
   });
+  it("pushing the tip a set distance reports the force it takes (F = 3EIδ/L³)", () => {
+    // snap-arm style test: displace the free end by the deflection 10 N would cause → reaction ≈ 10 N
+    const part = new Part(box(100, 10, 10), { material: "PLA", settings: { infill: 1 } });
+    const I = (10 * 10 ** 3) / 12;
+    const delta = (10 * 100 ** 3) / (3 * 2600 * I);
+    const r = checkStrength(part, { fixed: [{ face: "-x" }], loads: [], displacements: [{ region: { face: "+x" }, move: [0, 0, -delta] }] }, { elements: 8000 });
+    expect(r.data.converged).toBe(true);
+    expect(r.data.pushForces[0].forceN).toBeGreaterThan(8);
+    expect(r.data.pushForces[0].forceN).toBeLessThan(12);
+    expect(r.data.maxDeflection).toBeCloseTo(delta, 1);
+    expect(r.findings.some((f) => /takes about/.test(f.message))).toBe(true);
+  });
 });

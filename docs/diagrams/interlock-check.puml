@@ -1,0 +1,47 @@
+@startuml interlock-check
+skinparam backgroundColor #FFFFFF
+skinparam ArrowColor #3B4250
+skinparam RoundCorner 8
+skinparam ActivityBackgroundColor #EEF0FF
+skinparam ActivityBorderColor #5B6CF0
+skinparam ActivityDiamondBackgroundColor #FFF6E5
+skinparam ActivityDiamondBorderColor #3B4250
+skinparam defaultFontName Helvetica
+skinparam shadowing false
+title How an interlock is checked (phyx3d interlock / check_interlock)
+
+start
+:Load the parts in their assembled positions;
+:Pick the motion family from the type
+(slide, twist, screw, snap, friction, custom);
+:Build the insertion path
+(from the spec's axis, depth, angle, pitch,
+or the custom insert steps);
+if (family is friction?) then (press fit)
+  :Measure how deep the parts overlap per side;
+  :Compare with 0.02 to 0.25 mm interference;
+else (moves)
+  :Fit in place: gap, touching,
+  clamped or overlapping;
+  :Sweep the removal path against the other parts;
+  if (path blocked?) then (yes)
+    if (hold = none?) then (yes)
+      :Jams (reports where);
+    else (no)
+      :Held by the catch;
+      :Engagement = catch height minus free play;
+      :Compare with 0.2 mm (detent)
+      or 0.6 mm (lock);
+    endif
+  else (clear)
+    :Goes together;
+  endif
+  :Escape tests: 6 directions (and twists),
+  free play in each;
+  :Wrong ways: flip about X and Y, turn about Z,
+  sweep the same path again;
+endif
+:Result: status, findings, fixes, data
+and a picture;
+stop
+@enduml

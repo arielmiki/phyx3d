@@ -208,3 +208,13 @@ input[type=range] { accent-color: var(--accent); width: 100%; }
   #drop span { display: none; }
   .tab p { margin-bottom: 8px; }
 }
+
+/* interlock run viewer (agent/CLI runs) */
+.il-overlay { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.6); display: grid; place-items: center; padding: 16px; }
+.il-box { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); max-width: min(1100px, 100%); max-height: 100%; overflow: auto; padding: 14px 18px; }
+.il-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; position: sticky; top: -14px; background: var(--panel); padding: 4px 0 8px; }
+.il-close { margin-left: auto; background: none; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; padding: 2px 8px; }
+.il-box h3 { font-size: 14px; margin: 14px 0 8px; display: flex; gap: 8px; align-items: center; }
+.il-box img { width: 100%; border-radius: 8px; background: #fff; }
+.il-box ul { margin: 8px 0; padding-left: 18px; }
+.il-box li.fail { color: var(--fail); } .il-box li.warn { color: var(--warn); }

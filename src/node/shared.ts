@@ -2,7 +2,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, basename, resolve, dirname, isAbsolute } from "node:path";
-import { loadFile, writeBinarySTL, simulateMechanism, renderMechanism, type LoadedFile, type Report, type CheckResult, type Mesh, type MechSpec, type MechOutput } from "../core/index.js";
+import { loadFile, writeBinarySTL, simulateMechanism, renderMechanism, checkInterlockFile, type InterlockFile, type InterlockRun, type LoadedFile, type Report, type CheckResult, type Mesh, type MechSpec, type MechOutput } from "../core/index.js";
 
 export function loadPath(path: string): LoadedFile {
   const p = resolve(path);
@@ -94,4 +94,32 @@ export function saveMechanismRun(name: string, spec: MechSpec, out: MechOutput, 
   };
   for (const p of out.parts) extra[`part-${p.id}.stl`] = writeBinarySTL(p.mesh);
   return saveRun("mechanism", name, undefined, compactCheck(out.check), { film: png }, extra);
+}
+
+// ---------- interlocking parts ----------
+
+/** Run a `.interlock.json` — or an inline spec whose part files resolve against `baseDir`. */
+export function runInterlockFile(path: string | undefined, opts: { spec?: InterlockFile; baseDir?: string } = {}): { run: InterlockRun; spec: InterlockFile } {
+  if (!path && !opts.spec) throw new Error("Give a .interlock.json path or an inline spec");
+  const spec: InterlockFile = opts.spec ?? JSON.parse(readFileSync(resolve(path!), "utf8"));
+  const base = opts.baseDir ?? (path ? dirname(resolve(path)) : process.cwd());
+  const run = checkInterlockFile(spec, (f) => {
+    const p = isAbsolute(f) ? f : join(base, f);
+    if (!existsSync(p)) throw new Error(`Part file not found: ${p}`);
+    return new Uint8Array(readFileSync(p));
+  });
+  return { run, spec };
+}
+
+/** Result without pictures, small enough for an agent. */
+export function interlockPayload(run: InterlockRun) {
+  return { name: run.name, status: run.status, summary: run.summary, interlocks: run.checks.map(({ picture: _p, ...c }) => compactCheck(c)) };
+}
+
+export function saveInterlockRun(run: InterlockRun): string {
+  const images: Record<string, Uint8Array> = {};
+  run.checks.forEach((c, i) => { images[`interlock-${i + 1}`] = c.picture; });
+  const extra: Record<string, string | Uint8Array> = {};
+  for (const p of run.parts) extra[`part-${p.id}.stl`] = writeBinarySTL(p.mesh);
+  return saveRun("interlock", run.name, undefined, interlockPayload(run), images, extra);
 }

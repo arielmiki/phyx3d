@@ -5,6 +5,27 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-24
+
+### Added
+- **Interlocking parts** (`phyx3d interlock`, MCP `check_interlock`, `.interlock.json`): an optional check for
+  dovetails, T-slots, bayonets, snap-fits, detents, threads, press fits and 56 named types in six motion families.
+  It reports:
+  - fit in place (gap / touching / clamped / overlapping);
+  - whether the assembly path is clear, and where it jams;
+  - escape directions and free play;
+  - detent/lock engagement after play, in whole layers;
+  - press-fit interference;
+  - wrong-way assembly.
+
+  Example pairs are in `examples/interlocks/`; docs are in `docs/INTERLOCKS.md`.
+- Displacement loads for the strength test (`stress --move region=dx,dy,dz`, MCP `stress_test.displacements`):
+  push a region a set distance and get the safety factor at that travel and the force it takes. This is the right
+  way to test snap arms and clips.
+
+### Changed
+- Strength solver iteration limit raised from 4000 to 10000 for large meshes.
+
 ## [0.1.1] - 2026-09-24
 
 ### Fixed
@@ -33,6 +54,7 @@ First public release.
 - Package builds itself when run from GitHub (`npx -y github:arielmiki/phyx3d`) and before publishing.
 - Release workflow: pushing a `v*` tag publishes to npm via trusted publishing (OIDC), with provenance.
 
-[Unreleased]: https://github.com/arielmiki/phyx3d/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/arielmiki/phyx3d/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/arielmiki/phyx3d/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/arielmiki/phyx3d/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/arielmiki/phyx3d/releases/tag/v0.1.0

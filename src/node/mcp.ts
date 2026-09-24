@@ -5,9 +5,9 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import {
   analyze, renderReport, suggestOrientations, checkStrength, dropTest, tiltTest, pushTest, stackTest, checkGcode,
-  Part, MATERIALS, PRINTERS, MOTOR_PRESETS, buildReport, type LoadCase, type VisualMode, type ViewName, type MechSpec,
+  Part, MATERIALS, PRINTERS, MOTOR_PRESETS, INTERLOCK_TYPES, buildReport, type LoadCase, type VisualMode, type ViewName, type MechSpec, type InterlockFile,
 } from "../core/index.js";
-import { loadPath, requireMesh, compactReport, compactCheck, saveRun, runMechanismFile, saveMechanismRun } from "./shared.js";
+import { loadPath, requireMesh, compactReport, compactCheck, saveRun, runMechanismFile, saveMechanismRun, runInterlockFile, interlockPayload, saveInterlockRun } from "./shared.js";
 import { sliceWithBambu } from "./slice.js";
 
 const server = new McpServer({ name: "phyx3d", version: "0.1.0" });
@@ -71,7 +71,7 @@ server.registerTool(
   {
     title: "Strength test (FEA)",
     description:
-      "Finite-element strength test with FDM layer weakness. Hold the part at `fixed` regions and apply `loads` (newtons) and/or `acceleration` (in g). " +
+      "Finite-element strength test with FDM layer weakness. Hold the part at `fixed` regions and apply `loads` (newtons), `displacements` (mm) and/or `acceleration` (in g). " +
       "Returns minimum safety factor, weakest spot (mm), whether it fails along or across layers, max deflection, and a colour stress picture. " +
       "Region coordinates are printer mm after placement (get them from analyze_model `placement`). " +
       "Examples: shelf bracket → fixed [{face:'-x'}] (wall side), loads [{region:{face:'top'}, force:[0,0,-50]}]. " +
@@ -82,6 +82,8 @@ server.registerTool(
       fixed: z.array(region).min(1).describe("Where the part is held (screwed, glued, clamped)"),
       loads: z.array(z.object({ region, force: vec3.describe("Force in newtons [fx,fy,fz]; 10 N ≈ 1 kg hanging") })).optional(),
       acceleration: vec3.optional().describe("Body acceleration in g, e.g. [0,0,-1] = own weight"),
+      displacements: z.array(z.object({ region, move: vec3.describe("Distance in mm [dx,dy,dz] the region is pushed") })).optional()
+        .describe("Push a region a set distance instead of a force: use for snap arms, detents and clips (their travel is fixed by the geometry). Reports the force it takes (pushForces, N) and the safety factor at that travel."),
       required_safety: z.number().optional().describe("Required safety factor (default 2)"),
       resolution: z.number().int().min(2000).max(120000).optional().describe("Number of finite elements (default 25000; more = slower, finer)"),
     },
@@ -90,7 +92,7 @@ server.registerTool(
     try {
       const f = loadPath(a.path);
       const part = new Part(requireMesh(f), partOpts(a));
-      const lc: LoadCase = { fixed: a.fixed, loads: a.loads ?? [], acceleration: a.acceleration };
+      const lc: LoadCase = { fixed: a.fixed, loads: a.loads ?? [], acceleration: a.acceleration, displacements: a.displacements };
       const s = checkStrength(part, lc, { requiredSafety: a.required_safety, elements: a.resolution });
       const { fea, ...check } = s;
       const img = renderReport(part, buildReport(part, [check]), "stress", fea);
@@ -203,6 +205,37 @@ server.registerTool(
       const { out, png: film, spec } = await runMechanismFile(a.path ?? "", { spec: a.spec as MechSpec | undefined, baseDir, duration: a.duration });
       saveMechanismRun(spec.name ?? "mechanism", spec, out, film);
       return { content: [json(compactCheck(out.check)), png(film)] };
+    } catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
+  "check_interlock",
+  {
+    title: "Check interlocking parts",
+    description:
+      "Do two (or more) printed parts that lock together actually work? Sweeps the moving part along its assembly path against the others with exact mesh collision. " +
+      "Checks: fit in the assembled pose (gap / touching / clamped / overlapping), whether the path is clear or jams (and where), which directions it can escape and the free play in each, " +
+      "detent/lock engagement (catch height minus free play, vs 0.2 mm detent / 0.6 mm lock, in whole layers), press-fit interference, and whether it also goes together the wrong way (flipped/turned). " +
+      "Give a .interlock.json (`path`) or the spec inline (`spec` + `base_dir`). Model every part in its ASSEMBLED position. " +
+      "Spec: {name, layerHeight, parts:[{id, file | shape, position, rotation}], interlocks:[{name, type, moving (part id), against:[part ids] (default: all others), " +
+      "axis:[x,y,z] (direction the moving part travels to go IN; for twist/screw the turning axis), travel (mm), depth (mm pushed in before a twist), angle (° twist, sign = direction), " +
+      "center:[x,y,z] (point on the turning axis), pitch, turns (screw), hold: lock|detent|none, clearance:[min,max] mm, insert:[{move:[x,y,z]} | {rotate:deg, axis, about} | {screw:deg, pitch, axis, about}] (custom path), wrongWays}]}. " +
+      `Types: ${Object.keys(INTERLOCK_TYPES).join(", ")}. ` +
+      "Motion families: slide (dovetail, T-slot, tongue-and-groove, mortise-and-tenon…), twist (bayonet, quarter-turn, cam lock…), screw (thread), snap (cantilever/annular snap, detent, ball snap…), friction (press-fit, wedge, collet). " +
+      "Snap arm strength is a separate test: run stress_test with `displacements` at the catch height this tool reports. Returns JSON per interlock plus a picture each (moving part in blue, insertion path, first contact).",
+    inputSchema: {
+      path: z.string().optional().describe("Absolute path to a .interlock.json file"),
+      spec: z.record(z.string(), z.unknown()).optional().describe("Interlock spec inline (instead of path)"),
+      base_dir: z.string().optional().describe("Folder that part `file` paths in an inline spec are relative to"),
+    },
+  },
+  async (a) => {
+    try {
+      if (!a.path && !a.spec) throw new Error("Give `path` to a .interlock.json file or an inline `spec`.");
+      const { run } = runInterlockFile(a.path, { spec: a.spec as InterlockFile | undefined, baseDir: a.path ? undefined : a.base_dir ?? process.cwd() });
+      saveInterlockRun(run);
+      return { content: [json(interlockPayload(run)), ...run.checks.slice(0, 4).map((c) => png(c.picture))] };
     } catch (e) { return fail(e); }
   },
 );

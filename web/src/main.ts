@@ -574,6 +574,7 @@ async function openRun(r: Run) {
     setMechSpec(spec);
     return runMechanism().catch(showError);
   }
+  if (r.kind === "interlock") return showInterlockRun(r);
   const result = await (await fetch(`api/runs/${encodeURIComponent(r.id)}/result.json`)).json().catch(() => null);
   // the saved STL is already in print pose: analyse it without extra rotation
   for (const id of ["#rx", "#ry", "#rz"]) ($(id) as HTMLInputElement).value = "0";
@@ -581,6 +582,22 @@ async function openRun(r: Run) {
   if (mat && MATERIALS[mat]) ($("#material") as HTMLSelectElement).value = mat;
   await openUrl(`api/runs/${encodeURIComponent(r.id)}/model.stl`, r.name, { keepSettings: true });
   if (r.kind === "stress") toast("Agent ran a strength test — re-run it in the Strength tab to see the stress map.");
+}
+
+/** Interlock runs come from the CLI / agent only: show their pictures and findings. */
+async function showInterlockRun(r: Run) {
+  const base = `api/runs/${encodeURIComponent(r.id)}/`;
+  const res = await (await fetch(base + "result.json")).json() as { summary: string; interlocks: CheckResult[] };
+  document.querySelector(".il-overlay")?.remove();
+  const el = document.createElement("div");
+  el.className = "il-overlay";
+  el.innerHTML = `<div class="il-box"><div class="il-head"><b>${esc(r.name)}</b> <span class="muted">${esc(res.summary)}</span><button class="il-close" aria-label="Close">✕</button></div>` +
+    res.interlocks.map((c, i) => `<section><h3><span class="pill ${c.status}">${c.status}</span> ${esc(c.title)}</h3>
+      <img src="${base}interlock-${i + 1}.png" alt="${esc(c.title)}">
+      <ul>${c.findings.map((f) => `<li class="${f.status}">${esc(f.message)}</li>`).join("")}</ul>
+      ${c.fixes.length ? `<p class="small muted">Fix: ${c.fixes.map(esc).join(" · ")}</p>` : ""}</section>`).join("") + "</div>";
+  el.addEventListener("click", (e) => { if (e.target === el || (e.target as HTMLElement).classList.contains("il-close")) el.remove(); });
+  document.body.appendChild(el);
 }
 
 try {

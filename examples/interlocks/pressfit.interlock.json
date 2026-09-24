@@ -1,0 +1,10 @@
+{
+ "name": "press-fit pin",
+ "parts": [
+  { "id": "block", "file": "pressfit_block.stl" },
+  { "id": "pin", "file": "pressfit_pin.stl" }
+ ],
+ "interlocks": [
+  { "name": "pin in hole", "type": "press-fit", "moving": "pin", "axis": [0, 0, -1] }
+ ]
+}

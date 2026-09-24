@@ -3,13 +3,13 @@
 import { Command } from "commander";
 import { writeFileSync, readFileSync, existsSync, mkdirSync, cpSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, basename, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   analyze, renderReport, suggestOrientations, checkStrength, dropTest, tiltTest, pushTest, stackTest, checkGcode,
-  Part, MATERIALS, PRINTERS, buildReport, type CheckResult, type Region, type LoadCase, type Report, type VisualMode, type FloorType,
+  Part, MATERIALS, PRINTERS, buildReport, type CheckResult, type Region, type LoadCase, type Report, type VisualMode, type FloorType, type InterlockRun,
 } from "../core/index.js";
-import { loadPath, requireMesh, compactReport, compactCheck, saveRun, parseVec, runMechanismFile, saveMechanismRun } from "./shared.js";
+import { loadPath, requireMesh, compactReport, compactCheck, saveRun, parseVec, runMechanismFile, saveMechanismRun, runInterlockFile, interlockPayload, saveInterlockRun } from "./shared.js";
 import { sliceWithBambu, findBambuStudio } from "./slice.js";
 import { startServer } from "./server.js";
 
@@ -96,6 +96,7 @@ common(program.command("stress <file>").description("strength test: hold the par
   .requiredOption("--fixed <region...>", "held region(s): bottom|top|-x|+x|-y|+y|box:..|sphere:..|rel:0,0,0:0.1,1,1")
   .option("--force <spec...>", "region=fx,fy,fz newtons, e.g. top=0,0,-50")
   .option("--accel <x,y,z>", "body acceleration in g, e.g. 0,0,-1 for own weight")
+  .option("--move <spec...>", "region=dx,dy,dz mm: push a region a set distance (snap/detent/clip travel); reports the force it takes")
   .option("--safety <n>", "required safety factor", "2")
   .option("--elements <n>", "FE resolution (solid voxels)", "25000")
   .option("--png <file>", "save the stress picture")
@@ -106,7 +107,9 @@ common(program.command("stress <file>").description("strength test: hold the par
       fixed: o.fixed.map(parseRegion),
       loads: (o.force ?? []).map((s: string) => { const [r, v] = s.split("="); return { region: parseRegion(r), force: parseVec(v)! }; }),
       acceleration: parseVec(o.accel),
+      displacements: (o.move ?? []).map((s: string) => { const [r, v] = s.split("="); return { region: parseRegion(r), move: parseVec(v)! }; }),
     };
+    if (!lc.loads.length && !lc.displacements!.length && !lc.acceleration) throw new Error("Give at least one --force, --move or --accel.");
     const t0 = Date.now();
     const s = checkStrength(part, lc, { requiredSafety: +o.safety, elements: +o.elements });
     const { fea, ...check } = s;
@@ -174,6 +177,53 @@ program.command("mech <file>").description("simulate a mechanism (.mech.json): r
     printCheck(out.check);
     for (const f of out.check.findings.slice(6)) console.log(`     · ${f.message}`);
     for (const x of out.check.fixes) console.log(`  → ${x}`);
+    console.log(`  (${Date.now() - t0} ms)`);
+  });
+
+program.command("interlock <files...>")
+  .description("interlocking parts (dovetail, T-slot, bayonet, snap, thread, press-fit, …): fit, assembly path, what holds it, wrong-way assembly. " +
+    "Give a .interlock.json, or the fixed part(s) then the moving part with --type")
+  .option("--type <type>", "interlock type, e.g. dovetail, t-slot, bayonet, detent, cantilever-snap, thread, press-fit (see docs/INTERLOCKS.md)")
+  .option("--axis <x,y,z>", "direction the moving part travels to go IN (slide/snap/push); for twist/screw the twist axis")
+  .option("--travel <mm>", "how far it slides in (default: its length + 2)")
+  .option("--depth <mm>", "twist types: how far it pushes in before turning")
+  .option("--angle <deg>", "twist types: turn angle (sign = direction)")
+  .option("--center <x,y,z>", "twist/screw: a point on the turning axis (default: moving part's centre)")
+  .option("--pitch <mm>", "screw: thread pitch")
+  .option("--turns <n>", "screw: turns to seat")
+  .option("--hold <kind>", "what should keep it assembled: lock | detent | none")
+  .option("--layer <mm>", "layer height for the catch-size check", "0.2")
+  .option("--png <file>", "save the picture (first interlock; -N suffix for more)")
+  .option("--json", "print JSON")
+  .option("--no-save", "don't record this run in ~/.phyx3d/runs")
+  .action(async (files: string[], o) => {
+    const t0 = Date.now();
+    const specs = files.filter((f) => f.endsWith(".json"));
+    if (specs.length && specs.length !== files.length) throw new Error("Give .interlock.json files, or part files — not both.");
+    const runs: InterlockRun[] = specs.length ? specs.map((f) => runInterlockFile(f).run) : [(() => {
+      if (files.length < 2) throw new Error("Give a .interlock.json, or at least two part files: the fixed part(s), then the moving part.");
+      const parts = files.map((f) => ({ id: basename(f).replace(/\.[^.]+$/, ""), file: resolvePath(f) }));
+      const num = (v: string | undefined) => (v === undefined ? undefined : +v);
+      return runInterlockFile(undefined, { spec: {
+        name: parts[parts.length - 1].id, parts, layerHeight: +o.layer,
+        interlocks: [{ type: o.type, moving: parts[parts.length - 1].id, axis: parseVec(o.axis), travel: num(o.travel), depth: num(o.depth), angle: num(o.angle),
+          center: parseVec(o.center), pitch: num(o.pitch), turns: num(o.turns), hold: o.hold }],
+      } }).run;
+    })()];
+    const pictures = runs.flatMap((r) => r.checks.map((c) => c.picture));
+    if (o.png) pictures.forEach((p, i) => writeFileSync(i ? o.png.replace(/(\.png)?$/i, `-${i + 1}.png`) : o.png, p));
+    if (o.save) runs.forEach(saveInterlockRun);
+    if (o.json) return console.log(JSON.stringify(runs.length === 1 ? interlockPayload(runs[0]) : runs.map(interlockPayload), null, 1));
+    for (const run of runs) {
+      if (runs.length > 1) console.log(`\n— ${run.name}`);
+      for (const c of run.checks) {
+        printCheck(c);
+        for (const f of c.findings.slice(6)) console.log(`     · ${f.message}`);
+        for (const x of c.fixes) console.log(`  → ${x}`);
+      }
+      if (run.checks.length > 1) console.log(`\n${ICON[run.status]} ${run.summary}`);
+    }
+    if (runs.some((r) => r.status === "fail")) process.exitCode = 2;
     console.log(`  (${Date.now() - t0} ms)`);
   });
 

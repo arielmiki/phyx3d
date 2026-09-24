@@ -17,3 +17,4 @@ export * from "./png.js";
 export * from "./analyze.js";
 export * from "./expr.js";
 export * from "./mechanism.js";
+export * from "./interlock.js";

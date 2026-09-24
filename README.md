@@ -43,6 +43,7 @@ any FDM printer.
 | Warp risk | material, footprint, corners, enclosure | rough guide |
 | Strength under load, **including weak layer bonds** | voxel finite-element solver (8-node hexahedra, PCG) | rough guide |
 | Drop / tilt / push / stack tests | Rapier rigid-body physics with printed mass & friction | simulated |
+| **Interlocking parts** (optional) — dovetails, T-slots, bayonets, snaps, detents, threads, press fits: do they fit, go together, stay together, and only one way? | exact mesh collision along the assembly path | exact geometry |
 | **Mechanisms** — does the robot walk, the car drive, the arm lift, the linkage move? | multi-body physics, joints, real servo/motor torque & speed limits | simulated |
 | Best print orientation | ranks candidate orientations by supports, islands, stability, warp, height | estimate |
 | Sliced G-code: time, filament, extrusion printed over air | toolpath parser | exact |
@@ -77,6 +78,8 @@ tower) and example mechanisms (rover, walking robot, robot arm, crank-slider).
 phyx3d check part.stl -m PETG --png report.png     # all printability checks + picture
 phyx3d orient part.stl                             # best print orientations
 phyx3d stress bracket.stl --fixed -x --force "rel:0.8,0,0:1,1,1=0,0,-50"
+phyx3d stress latch.stl --fixed "rel:0,0,0:0.1,1,1" --move "rel:0.9,0,0:1,1,1=0,0,0.6"   # push a snap arm 0.6 mm
+phyx3d interlock rail.stl slider.stl --type dovetail --axis 1,0,0   # interlocking parts
 phyx3d drop part.stl --height 750 --floor wood     # also: tilt, push, stack
 phyx3d mech robot.mech.json --png walk.png         # robots & mechanisms
 phyx3d gcode plate_1.gcode.3mf
@@ -97,7 +100,7 @@ use the design's axes; testing a different print orientation only changes which 
 ## Use it with an AI agent (MCP)
 
 The MCP server gives an agent these tools: `analyze_model`, `suggest_orientation`, `stress_test`,
-`simulate_physics`, `simulate_mechanism`, `render_view`, `check_gcode`, `slice_bambu`, `list_materials`.
+`simulate_physics`, `simulate_mechanism`, `check_interlock`, `render_view`, `check_gcode`, `slice_bambu`, `list_materials`.
 Results come back as JSON **plus a picture**, so the agent can see what is wrong.
 
 Register the server — no clone or build needed:
@@ -165,6 +168,28 @@ rating, how often it hits its limit and how far it lags; parts that collide or o
 picture; and a 3D replay in the web app. See **[docs/MECHANISMS.md](docs/MECHANISMS.md)** for the full format and
 [`examples/mechanisms/`](examples/mechanisms) for working examples.
 
+## Interlocking parts
+
+Dovetails, T-slots, bayonets, snap-fits, detents, threads and press fits (56 named types, each checked as one of
+six motions). Model the parts in their assembled position and say which one moves:
+
+```bash
+phyx3d interlock rail.stl slider.stl --type dovetail --axis 1,0,0
+phyx3d interlock enclosure.interlock.json          # several interlocks, one file
+```
+
+For each interlock you get:
+- **Fit:** the gap, touching, clamped at zero clearance, or overlapping.
+- **Assembly path:** whether it goes in along its path, or jams and where.
+- **Escapes:** which ways it can come off, and the free play in each direction.
+- **Engagement:** for detents and locks, the catch height minus the free play, checked in whole layers.
+- **Press fits:** the interference per side.
+- **Wrong ways:** whether a flipped or turned copy also goes together.
+
+It is optional: `phyx3d check` doesn't run it. To check the strength of a snap arm, push it by its travel with
+`phyx3d stress --move`. See **[docs/INTERLOCKS.md](docs/INTERLOCKS.md)** and the example pairs in
+[`examples/interlocks/`](examples/interlocks).
+
 ## Slicing with Bambu Studio (optional)
 
 `phyx3d slice part.stl` runs the real Bambu Studio command line and returns the `.gcode.3mf` with exact print time,
@@ -184,6 +209,8 @@ This integration is the least-tested part of phyx3d; reports and fixes are very 
 - Strength uses isotropic stiffness with separate along-layer / across-layer strength limits and a simple
   wall/infill knock-down. Treat safety factors as a comparison tool, not a certificate.
 - Warp risk is a heuristic score, not a thermal simulation.
+- Interlock checks are rigid geometry: they find where parts touch and how far they must flex, not whether the
+  plastic survives it (use `stress --move` for that). Curved faces are only as exact as the STL's facets.
 - Mechanism motors are torque-limited controllers with estimated gearbox inertia; gear and bearing friction,
   backlash, servo electronics and battery sag are not modelled — keep roughly 30 % torque margin.
 - Material values are typical datasheet numbers; real filaments vary by brand, colour and print settings.
