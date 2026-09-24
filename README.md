@@ -2,6 +2,8 @@
 
 **Test your 3D prints before you print them — and let AI agents do it for you.**
 
+[![npm version](https://img.shields.io/npm/v/phyx3d.svg)](https://www.npmjs.com/package/phyx3d)
+[![npm downloads](https://img.shields.io/npm/dm/phyx3d.svg)](https://www.npmjs.com/package/phyx3d)
 [![CI](https://github.com/arielmiki/phyx3d/actions/workflows/ci.yml/badge.svg)](https://github.com/arielmiki/phyx3d/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Node ≥ 20](https://img.shields.io/badge/node-%E2%89%A520-brightgreen)

@@ -35,8 +35,14 @@ jobs:
       - run: pnpm test
       - name: Check the tag matches package.json
         run: test "v$(node -p 'require(`./package.json`).version')" = "${GITHUB_REF_NAME}"
-      - run: npm publish --provenance --access public
+      - name: Publish to npm (skipped if this version is already published)
+        run: |
+          if npm view "phyx3d@$(node -p 'require(`./package.json`).version')" version >/dev/null 2>&1; then
+            echo "Version already on npm — skipping publish."
+          else
+            npm publish --provenance --access public
+          fi
       - name: GitHub release
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "See CHANGELOG.md"
+        run: gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "See CHANGELOG.md"
         env:
           GH_TOKEN: ${{ github.token }}
