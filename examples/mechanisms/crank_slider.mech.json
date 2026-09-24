@@ -1,0 +1,144 @@
+{
+ "name": "crank-slider",
+ "duration": 4,
+ "parts": [
+  {
+   "id": "base",
+   "shape": {
+    "box": [
+     160,
+     40,
+     6
+    ]
+   },
+   "position": [
+    40,
+    0,
+    3
+   ],
+   "fixed": true,
+   "color": "#555b6e"
+  },
+  {
+   "id": "crank",
+   "shape": {
+    "box": [
+     30,
+     8,
+     6
+    ]
+   },
+   "position": [
+    15,
+    -12,
+    40
+   ],
+   "color": "#f5b041"
+  },
+  {
+   "id": "rod",
+   "shape": {
+    "box": [
+     80,
+     8,
+     6
+    ]
+   },
+   "position": [
+    70,
+    -4,
+    40
+   ],
+   "color": "#7c8cff"
+  },
+  {
+   "id": "slider",
+   "shape": {
+    "box": [
+     20,
+     20,
+     20
+    ]
+   },
+   "position": [
+    110,
+    4,
+    40
+   ],
+   "color": "#3ecf8e"
+  }
+ ],
+ "joints": [
+  {
+   "id": "motor",
+   "type": "revolute",
+   "parent": "world",
+   "child": "crank",
+   "anchor": [
+    0,
+    -12,
+    40
+   ],
+   "axis": [
+    0,
+    1,
+    0
+   ],
+   "motor": {
+    "preset": "N20",
+    "target": 60
+   }
+  },
+  {
+   "id": "crank_pin",
+   "type": "revolute",
+   "parent": "crank",
+   "child": "rod",
+   "anchor": [
+    30,
+    -8,
+    40
+   ],
+   "axis": [
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "id": "wrist_pin",
+   "type": "revolute",
+   "parent": "rod",
+   "child": "slider",
+   "anchor": [
+    110,
+    -4,
+    40
+   ],
+   "axis": [
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "id": "rail",
+   "type": "prismatic",
+   "parent": "world",
+   "child": "slider",
+   "anchor": [
+    110,
+    4,
+    40
+   ],
+   "axis": [
+    1,
+    0,
+    0
+   ]
+  }
+ ],
+ "environment": {
+  "floor": true
+ }
+}

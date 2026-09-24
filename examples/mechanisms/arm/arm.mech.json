@@ -1,0 +1,17 @@
+{
+  "name": "2-DOF arm lifting 150 g",
+  "duration": 5,
+  "material": "PLA",
+  "infill": 20,
+  "parts": [
+    { "id": "base", "file": "base.stl", "fixed": true, "color": "#555b6e" },
+    { "id": "upper_arm", "file": "upper_arm.stl", "color": "#7c8cff" },
+    { "id": "forearm", "file": "forearm.stl", "payloads": [{ "mass": 150, "at": [188, 0, 60], "label": "payload" }], "color": "#f5b041" }
+  ],
+  "joints": [
+    { "id": "shoulder", "type": "revolute", "parent": "base", "child": "upper_arm", "anchor": [0, 0, 60], "axis": [0, -1, 0], "limits": [-10, 120],
+      "motor": { "preset": "MG996R", "target": { "keyframes": [[0, 0], [1.5, 60], [3, 60], [4.5, 0]], "smooth": true } } },
+    { "id": "elbow", "type": "revolute", "parent": "upper_arm", "child": "forearm", "anchor": [100, 0, 60], "axis": [0, -1, 0], "limits": [-120, 120],
+      "motor": { "preset": "MG996R", "target": { "keyframes": [[0, 0], [1.5, -30], [3, -30], [4.5, 0]], "smooth": true } } }
+  ]
+}

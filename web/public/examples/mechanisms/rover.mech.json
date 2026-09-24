@@ -1,0 +1,19 @@
+{
+  "name": "4WD rover",
+  "duration": 5,
+  "material": "PLA",
+  "parts": [
+    { "id": "chassis", "shape": { "box": [120, 80, 25] }, "position": [0, 0, 35], "extraMass": 60, "color": "#7c8cff" },
+    { "id": "wheel_fl", "shape": { "cylinder": { "r": 30, "h": 12, "axis": "y" } }, "position": [40, 50, 30], "material": "TPU", "color": "#333a48" },
+    { "id": "wheel_fr", "shape": { "cylinder": { "r": 30, "h": 12, "axis": "y" } }, "position": [40, -50, 30], "material": "TPU", "color": "#333a48" },
+    { "id": "wheel_rl", "shape": { "cylinder": { "r": 30, "h": 12, "axis": "y" } }, "position": [-40, 50, 30], "material": "TPU", "color": "#333a48" },
+    { "id": "wheel_rr", "shape": { "cylinder": { "r": 30, "h": 12, "axis": "y" } }, "position": [-40, -50, 30], "material": "TPU", "color": "#333a48" }
+  ],
+  "joints": [
+    { "id": "motor_fl", "type": "revolute", "parent": "chassis", "child": "wheel_fl", "anchor": [40, 50, 30], "axis": [0, 1, 0], "motor": { "preset": "TT", "target": 120 } },
+    { "id": "motor_fr", "type": "revolute", "parent": "chassis", "child": "wheel_fr", "anchor": [40, -50, 30], "axis": [0, 1, 0], "motor": { "preset": "TT", "target": 120 } },
+    { "id": "motor_rl", "type": "revolute", "parent": "chassis", "child": "wheel_rl", "anchor": [-40, 50, 30], "axis": [0, 1, 0], "motor": { "preset": "TT", "target": 120 } },
+    { "id": "motor_rr", "type": "revolute", "parent": "chassis", "child": "wheel_rr", "anchor": [-40, -50, 30], "axis": [0, 1, 0], "motor": { "preset": "TT", "target": 120 } }
+  ],
+  "environment": { "friction": 0.8 }
+}

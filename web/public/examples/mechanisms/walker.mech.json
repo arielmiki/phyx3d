@@ -1,0 +1,350 @@
+{
+ "name": "quadruped walker (trot + yaw steering)",
+ "duration": 6,
+ "material": "PLA",
+ "parts": [
+  {
+   "id": "body",
+   "shape": {
+    "box": [
+     100,
+     60,
+     16
+    ]
+   },
+   "position": [
+    0,
+    0,
+    70
+   ],
+   "extraMass": 80,
+   "color": "#7c8cff"
+  },
+  {
+   "id": "thigh_fl",
+   "shape": {
+    "box": [
+     8,
+     8,
+     35
+    ]
+   },
+   "position": [
+    40,
+    36,
+    52.5
+   ],
+   "color": "#f5b041"
+  },
+  {
+   "id": "shin_fl",
+   "shape": {
+    "box": [
+     8,
+     8,
+     35
+    ]
+   },
+   "position": [
+    40,
+    36,
+    17.5
+   ],
+   "color": "#3ecf8e"
+  },
+  {
+   "id": "thigh_fr",
+   "shape": {
+    "box": [
+     8,
+     8,
+     35
+    ]
+   },
+   "position": [
+    40,
+    -36,
+    52.5
+   ],
+   "color": "#f5b041"
+  },
+  {
+   "id": "shin_fr",
+   "shape": {
+    "box": [
+     8,
+     8,
+     35
+    ]
+   },
+   "position": [
+    40,
+    -36,
+    17.5
+   ],
+   "color": "#3ecf8e"
+  },
+  {
+   "id": "thigh_rl",
+   "shape": {
+    "box": [
+     8,
+     8,
+     35
+    ]
+   },
+   "position": [
+    -40,
+    36,
+    52.5
+   ],
+   "color": "#f5b041"
+  },
+  {
+   "id": "shin_rl",
+   "shape": {
+    "box": [
+     8,
+     8,
+     35
+    ]
+   },
+   "position": [
+    -40,
+    36,
+    17.5
+   ],
+   "color": "#3ecf8e"
+  },
+  {
+   "id": "thigh_rr",
+   "shape": {
+    "box": [
+     8,
+     8,
+     35
+    ]
+   },
+   "position": [
+    -40,
+    -36,
+    52.5
+   ],
+   "color": "#f5b041"
+  },
+  {
+   "id": "shin_rr",
+   "shape": {
+    "box": [
+     8,
+     8,
+     35
+    ]
+   },
+   "position": [
+    -40,
+    -36,
+    17.5
+   ],
+   "color": "#3ecf8e"
+  }
+ ],
+ "joints": [
+  {
+   "id": "hip_fl",
+   "type": "revolute",
+   "parent": "body",
+   "child": "thigh_fl",
+   "anchor": [
+    40,
+    36,
+    70
+   ],
+   "axis": [
+    0,
+    1,
+    0
+   ],
+   "limits": [
+    -60,
+    60
+   ],
+   "motor": {
+    "preset": "MG90S",
+    "target": "ramp(t,0,0.5)*clamp(22 + 0.1*yaw, 10, 30)*sin(2*pi*1.2*t + 0.0)"
+   }
+  },
+  {
+   "id": "knee_fl",
+   "type": "revolute",
+   "parent": "thigh_fl",
+   "child": "shin_fl",
+   "anchor": [
+    40,
+    36,
+    35
+   ],
+   "axis": [
+    0,
+    1,
+    0
+   ],
+   "limits": [
+    -10,
+    90
+   ],
+   "motor": {
+    "preset": "MG90S",
+    "target": "ramp(t,0,0.5)*30*max(0,-cos(2*pi*1.2*t + 0.0))"
+   }
+  },
+  {
+   "id": "hip_fr",
+   "type": "revolute",
+   "parent": "body",
+   "child": "thigh_fr",
+   "anchor": [
+    40,
+    -36,
+    70
+   ],
+   "axis": [
+    0,
+    1,
+    0
+   ],
+   "limits": [
+    -60,
+    60
+   ],
+   "motor": {
+    "preset": "MG90S",
+    "target": "ramp(t,0,0.5)*clamp(22 - 0.1*yaw, 10, 30)*sin(2*pi*1.2*t + 3.14159)"
+   }
+  },
+  {
+   "id": "knee_fr",
+   "type": "revolute",
+   "parent": "thigh_fr",
+   "child": "shin_fr",
+   "anchor": [
+    40,
+    -36,
+    35
+   ],
+   "axis": [
+    0,
+    1,
+    0
+   ],
+   "limits": [
+    -10,
+    90
+   ],
+   "motor": {
+    "preset": "MG90S",
+    "target": "ramp(t,0,0.5)*30*max(0,-cos(2*pi*1.2*t + 3.14159))"
+   }
+  },
+  {
+   "id": "hip_rl",
+   "type": "revolute",
+   "parent": "body",
+   "child": "thigh_rl",
+   "anchor": [
+    -40,
+    36,
+    70
+   ],
+   "axis": [
+    0,
+    1,
+    0
+   ],
+   "limits": [
+    -60,
+    60
+   ],
+   "motor": {
+    "preset": "MG90S",
+    "target": "ramp(t,0,0.5)*clamp(22 + 0.1*yaw, 10, 30)*sin(2*pi*1.2*t + 3.14159)"
+   }
+  },
+  {
+   "id": "knee_rl",
+   "type": "revolute",
+   "parent": "thigh_rl",
+   "child": "shin_rl",
+   "anchor": [
+    -40,
+    36,
+    35
+   ],
+   "axis": [
+    0,
+    1,
+    0
+   ],
+   "limits": [
+    -10,
+    90
+   ],
+   "motor": {
+    "preset": "MG90S",
+    "target": "ramp(t,0,0.5)*30*max(0,-cos(2*pi*1.2*t + 3.14159))"
+   }
+  },
+  {
+   "id": "hip_rr",
+   "type": "revolute",
+   "parent": "body",
+   "child": "thigh_rr",
+   "anchor": [
+    -40,
+    -36,
+    70
+   ],
+   "axis": [
+    0,
+    1,
+    0
+   ],
+   "limits": [
+    -60,
+    60
+   ],
+   "motor": {
+    "preset": "MG90S",
+    "target": "ramp(t,0,0.5)*clamp(22 - 0.1*yaw, 10, 30)*sin(2*pi*1.2*t + 0.0)"
+   }
+  },
+  {
+   "id": "knee_rr",
+   "type": "revolute",
+   "parent": "thigh_rr",
+   "child": "shin_rr",
+   "anchor": [
+    -40,
+    -36,
+    35
+   ],
+   "axis": [
+    0,
+    1,
+    0
+   ],
+   "limits": [
+    -10,
+    90
+   ],
+   "motor": {
+    "preset": "MG90S",
+    "target": "ramp(t,0,0.5)*30*max(0,-cos(2*pi*1.2*t + 0.0))"
+   }
+  }
+ ],
+ "environment": {
+  "friction": 0.8
+ },
+ "track": "body"
+}

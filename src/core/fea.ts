@@ -1,0 +1,414 @@
+// Linear-elastic finite element analysis on the voxel grid (8-node hexahedra, matrix-free PCG).
+// Stiffness is isotropic; strength is checked separately along layers (XY) and across layers (Z),
+// because FDM parts are much weaker when pulled apart between layers.
+import type { Part } from "./context.js";
+import { type VoxelGrid, voxelize, vIndex } from "./voxel.js";
+import { type CheckResult, type Finding, r2, r3 } from "./report.js";
+
+export type Region =
+  | { face: "bottom" | "top" | "-x" | "+x" | "-y" | "+y"; depth?: number }
+  | { box: { min: [number, number, number]; max: [number, number, number] } }
+  | { sphere: { center: [number, number, number]; radius: number } }
+  /** box as fractions of the part's bounding box: [0,0,0] = min corner, [1,1,1] = max corner */
+  | { rel: { min: [number, number, number]; max: [number, number, number] } };
+
+export interface LoadCase {
+  /** where the part is held (glued, screwed, clamped) */
+  fixed: Region[];
+  /** forces in newtons, spread evenly over the region */
+  loads: { region: Region; force: [number, number, number] }[];
+  /** body acceleration in g (e.g. [0,0,-1] = own weight, [0,0,-50] ≈ hard drop impact) */
+  acceleration?: [number, number, number];
+}
+
+export interface FeaOptions {
+  /** target number of solid elements (speed vs accuracy); default 25k */
+  elements?: number;
+  maxIterations?: number;
+  tolerance?: number;
+}
+
+export interface FeaResult {
+  grid: VoxelGrid;
+  /** element index (voxel index) for each solved element */
+  elements: Int32Array;
+  vonMises: Float32Array;
+  /** stress pulling layers apart (normal + ½·interlayer shear), MPa */
+  sigmaZ: Float32Array;
+  safety: Float32Array;
+  maxDisplacement: number;
+  maxDisplacementAt: [number, number, number];
+  iterations: number;
+  converged: boolean;
+  droppedElements: number;
+}
+
+// ---------- unit-cube element matrices ----------
+
+const XI = [-1, 1, 1, -1, -1, 1, 1, -1];
+const ETA = [-1, -1, 1, 1, -1, -1, 1, 1];
+const ZETA = [-1, -1, -1, -1, 1, 1, 1, 1];
+const G = 1 / Math.sqrt(3);
+const GAUSS: [number, number, number][] = [];
+for (const a of [-G, G]) for (const b of [-G, G]) for (const c of [-G, G]) GAUSS.push([a, b, c]);
+
+/** strain-displacement matrix (6×24) for a cube with edge 1 at natural point (ξ,η,ζ) */
+function Bmatrix(xi: number, eta: number, zeta: number): Float64Array {
+  const B = new Float64Array(6 * 24);
+  for (let i = 0; i < 8; i++) {
+    // dN/dx = dN/dξ · 2/h with h = 1
+    const dx = (XI[i] * (1 + ETA[i] * eta) * (1 + ZETA[i] * zeta)) / 8 * 2;
+    const dy = (ETA[i] * (1 + XI[i] * xi) * (1 + ZETA[i] * zeta)) / 8 * 2;
+    const dz = (ZETA[i] * (1 + XI[i] * xi) * (1 + ETA[i] * eta)) / 8 * 2;
+    const c = i * 3;
+    B[0 * 24 + c] = dx;
+    B[1 * 24 + c + 1] = dy;
+    B[2 * 24 + c + 2] = dz;
+    B[3 * 24 + c] = dy; B[3 * 24 + c + 1] = dx;
+    B[4 * 24 + c + 1] = dz; B[4 * 24 + c + 2] = dy;
+    B[5 * 24 + c] = dz; B[5 * 24 + c + 2] = dx;
+  }
+  return B;
+}
+
+function Dmatrix(E: number, nu: number): Float64Array {
+  const l = (E * nu) / ((1 + nu) * (1 - 2 * nu));
+  const mu = E / (2 * (1 + nu));
+  const D = new Float64Array(36);
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) D[i * 6 + j] = l + (i === j ? 2 * mu : 0);
+  for (let i = 3; i < 6; i++) D[i * 6 + i] = mu;
+  return D;
+}
+
+const GAUSS_B = GAUSS.map(([a, b, c]) => Bmatrix(a, b, c));
+
+/** Ke for a unit cube with E = 1 (scale by E·h for real elements). */
+function unitStiffness(nu: number): Float64Array {
+  const D = Dmatrix(1, nu);
+  const K = new Float64Array(24 * 24);
+  const detJ = 1 / 8; // (h/2)³ with h = 1
+  const DB = new Float64Array(6 * 24);
+  for (const B of GAUSS_B) {
+    DB.fill(0);
+    for (let i = 0; i < 6; i++) for (let k = 0; k < 6; k++) {
+      const d = D[i * 6 + k];
+      if (!d) continue;
+      for (let j = 0; j < 24; j++) DB[i * 24 + j] += d * B[k * 24 + j];
+    }
+    for (let a = 0; a < 24; a++) for (let b = 0; b < 24; b++) {
+      let s = 0;
+      for (let k = 0; k < 6; k++) s += B[k * 24 + a] * DB[k * 24 + b];
+      K[a * 24 + b] += s * detJ;
+    }
+  }
+  return K;
+}
+
+// ---------- solver ----------
+
+export function solveFea(part: Part, lc: LoadCase, opts: FeaOptions = {}): FeaResult {
+  const target = opts.elements ?? 25000;
+  const size = Math.max(0.25, Math.cbrt(part.mass.volume / target));
+  // strength runs on the design pose: loads/fixtures stay attached to the design whatever the print orientation
+  const grid = voxelize(part.designMesh, +size.toFixed(4));
+  const [bnx, bny, bnz] = part.buildDir;
+  const { nx, ny, nz } = grid;
+  const h = grid.size;
+  const mat = part.material;
+  const E = mat.youngsModulus;
+  const Ku = unitStiffness(mat.poisson);
+  const NX = nx + 1, NY = ny + 1;
+  const nodeId = (i: number, j: number, k: number) => i + NX * (j + NY * k);
+  const nodePos = (n: number): [number, number, number] => {
+    const i = n % NX, j = Math.floor(n / NX) % NY, k = Math.floor(n / (NX * NY));
+    return [grid.origin[0] + i * h, grid.origin[1] + j * h, grid.origin[2] + k * h];
+  };
+
+  // element list with their 8 node ids
+  const elemVox: number[] = [];
+  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (grid.data[vIndex(grid, i, j, k)]) elemVox.push(vIndex(grid, i, j, k));
+  const elemNodes = (v: number): number[] => {
+    const i = v % nx, j = Math.floor(v / nx) % ny, k = Math.floor(v / (nx * ny));
+    return [nodeId(i, j, k), nodeId(i + 1, j, k), nodeId(i + 1, j + 1, k), nodeId(i, j + 1, k), nodeId(i, j, k + 1), nodeId(i + 1, j, k + 1), nodeId(i + 1, j + 1, k + 1), nodeId(i, j + 1, k + 1)];
+  };
+
+  // active nodes
+  const totalNodes = NX * NY * (nz + 1);
+  const used = new Uint8Array(totalNodes);
+  for (const v of elemVox) for (const n of elemNodes(v)) used[n] = 1;
+  const activeNodes: number[] = [];
+  for (let n = 0; n < totalNodes; n++) if (used[n]) activeNodes.push(n);
+  let zMin = Infinity, zMax = -Infinity, xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+  for (const n of activeNodes) {
+    const [x, y, z] = nodePos(n);
+    zMin = Math.min(zMin, z); zMax = Math.max(zMax, z);
+    xMin = Math.min(xMin, x); xMax = Math.max(xMax, x);
+    yMin = Math.min(yMin, y); yMax = Math.max(yMax, y);
+  }
+  const inRegion = (r: Region, p: [number, number, number]): boolean => {
+    if ("face" in r) {
+      const d = Math.max(r.depth ?? 0, h * 0.5);
+      switch (r.face) {
+        case "bottom": return p[2] <= zMin + d;
+        case "top": return p[2] >= zMax - d;
+        case "-x": return p[0] <= xMin + d;
+        case "+x": return p[0] >= xMax - d;
+        case "-y": return p[1] <= yMin + d;
+        case "+y": return p[1] >= yMax - d;
+      }
+    }
+    if ("box" in r) {
+      const e = h * 0.5;
+      return [0, 1, 2].every((i) => p[i] >= r.box.min[i] - e && p[i] <= r.box.max[i] + e);
+    }
+    if ("rel" in r) {
+      const lo = [xMin, yMin, zMin], hi = [xMax, yMax, zMax];
+      const e = h * 0.5;
+      return [0, 1, 2].every((i) => p[i] >= lo[i] + r.rel.min[i] * (hi[i] - lo[i]) - e && p[i] <= lo[i] + r.rel.max[i] * (hi[i] - lo[i]) + e);
+    }
+    const c = r.sphere.center;
+    return Math.hypot(p[0] - c[0], p[1] - c[1], p[2] - c[2]) <= r.sphere.radius + h * 0.5;
+  };
+
+  const fixedNode = new Uint8Array(totalNodes);
+  let nFixed = 0;
+  for (const n of activeNodes) if (lc.fixed.some((r) => inRegion(r, nodePos(n)))) { fixedNode[n] = 1; nFixed++; }
+  if (!nFixed) throw new Error("No part of the model lies in the 'fixed' region — nothing holds the part.");
+
+  // drop elements not connected to a fixed node (they would float and make K singular)
+  const nodeElems = new Map<number, number[]>();
+  elemVox.forEach((v, e) => { for (const n of elemNodes(v)) { let l = nodeElems.get(n); if (!l) nodeElems.set(n, (l = [])); l.push(e); } });
+  const reached = new Uint8Array(elemVox.length);
+  const queue: number[] = [];
+  for (const n of activeNodes) if (fixedNode[n]) for (const e of nodeElems.get(n)!) if (!reached[e]) { reached[e] = 1; queue.push(e); }
+  while (queue.length) {
+    const e = queue.pop()!;
+    for (const n of elemNodes(elemVox[e])) for (const e2 of nodeElems.get(n)!) if (!reached[e2]) { reached[e2] = 1; queue.push(e2); }
+  }
+  const elements = elemVox.filter((_, e) => reached[e]);
+  const dropped = elemVox.length - elements.length;
+
+  // compact dof numbering
+  const dofOf = new Int32Array(totalNodes).fill(-1);
+  let nNodes = 0;
+  for (const v of elements) for (const n of elemNodes(v)) if (dofOf[n] < 0) dofOf[n] = nNodes++;
+  const ndof = nNodes * 3;
+  const nodeOfDof = new Int32Array(nNodes);
+  for (let n = 0; n < totalNodes; n++) if (dofOf[n] >= 0) nodeOfDof[dofOf[n]] = n;
+  const edofs = new Int32Array(elements.length * 24);
+  elements.forEach((v, e) => {
+    const ns = elemNodes(v);
+    for (let a = 0; a < 8; a++) for (let d = 0; d < 3; d++) edofs[e * 24 + a * 3 + d] = dofOf[ns[a]] * 3 + d;
+  });
+  const fixedDof = new Uint8Array(ndof);
+  for (let i = 0; i < nNodes; i++) if (fixedNode[nodeOfDof[i]]) fixedDof[i * 3] = fixedDof[i * 3 + 1] = fixedDof[i * 3 + 2] = 1;
+
+  // load vector (N)
+  const f = new Float64Array(ndof);
+  for (const load of lc.loads) {
+    const nodes: number[] = [];
+    for (let i = 0; i < nNodes; i++) if (inRegion(load.region, nodePos(nodeOfDof[i]))) nodes.push(i);
+    if (!nodes.length) throw new Error(`Load region ${JSON.stringify(load.region)} does not touch the part.`);
+    for (const i of nodes) for (let d = 0; d < 3; d++) f[i * 3 + d] += load.force[d] / nodes.length;
+  }
+  if (lc.acceleration) {
+    // element mass (kg) × g × accel → split over 8 nodes
+    const massE = (h ** 3 / 1e9) * mat.density * 1000 * part.estimateGrams().solidFraction;
+    for (let e = 0; e < elements.length; e++) for (let a = 0; a < 8; a++) for (let d = 0; d < 3; d++) {
+      f[edofs[e * 24 + a * 3 + d]] += (massE * 9.81 * lc.acceleration[d]) / 8;
+    }
+  }
+  for (let i = 0; i < ndof; i++) if (fixedDof[i]) f[i] = 0;
+
+  const scale = E * h;
+  const Ke = Ku;
+  const ue = new Float64Array(24);
+  const matvec = (x: Float64Array, y: Float64Array) => {
+    y.fill(0);
+    for (let e = 0; e < elements.length; e++) {
+      const o = e * 24;
+      for (let a = 0; a < 24; a++) ue[a] = x[edofs[o + a]];
+      for (let a = 0; a < 24; a++) {
+        let s = 0;
+        const row = a * 24;
+        for (let b = 0; b < 24; b++) s += Ke[row + b] * ue[b];
+        y[edofs[o + a]] += s * scale;
+      }
+    }
+    for (let i = 0; i < ndof; i++) if (fixedDof[i]) y[i] = 0;
+  };
+  // Jacobi preconditioner
+  const diag = new Float64Array(ndof);
+  for (let e = 0; e < elements.length; e++) for (let a = 0; a < 24; a++) diag[edofs[e * 24 + a]] += Ke[a * 25] * scale;
+  const invD = diag.map((d, i) => (fixedDof[i] || d === 0 ? 0 : 1 / d));
+
+  // PCG
+  const u = new Float64Array(ndof);
+  const r = Float64Array.from(f);
+  const z = r.map((v, i) => v * invD[i]);
+  const pdir = Float64Array.from(z);
+  const Ap = new Float64Array(ndof);
+  let rz = dot(r, z);
+  const fNorm = Math.sqrt(dot(f, f)) || 1;
+  const tol = opts.tolerance ?? 1e-6;
+  const maxIt = opts.maxIterations ?? 4000;
+  let it = 0, converged = false;
+  for (; it < maxIt; it++) {
+    matvec(pdir, Ap);
+    const alpha = rz / (dot(pdir, Ap) || 1e-300);
+    for (let i = 0; i < ndof; i++) { u[i] += alpha * pdir[i]; r[i] -= alpha * Ap[i]; }
+    if (Math.sqrt(dot(r, r)) / fNorm < tol) { converged = true; it++; break; }
+    for (let i = 0; i < ndof; i++) z[i] = r[i] * invD[i];
+    const rzNew = dot(r, z);
+    const beta = rzNew / rz;
+    rz = rzNew;
+    for (let i = 0; i < ndof; i++) pdir[i] = z[i] + beta * pdir[i];
+  }
+
+  // stresses: max over the 8 Gauss points of each element (MPa)
+  const D = Dmatrix(E, mat.poisson);
+  const vm = new Float32Array(elements.length);
+  const sz = new Float32Array(elements.length);
+  const sf = new Float32Array(elements.length);
+  const strain = new Float64Array(6), stress = new Float64Array(6);
+  const knock = strengthKnockdown(part);
+  for (let e = 0; e < elements.length; e++) {
+    for (let a = 0; a < 24; a++) ue[a] = u[edofs[e * 24 + a]];
+    let maxVm = 0, maxSz = -Infinity;
+    for (const B of GAUSS_B) {
+      for (let i = 0; i < 6; i++) { let s = 0; for (let j = 0; j < 24; j++) s += B[i * 24 + j] * ue[j]; strain[i] = s / h; }
+      for (let i = 0; i < 6; i++) { let s = 0; for (let j = 0; j < 6; j++) s += D[i * 6 + j] * strain[j]; stress[i] = s; }
+      const [sx, sy, szz, txy, tyz, tzx] = stress;
+      const v = Math.sqrt(0.5 * ((sx - sy) ** 2 + (sy - szz) ** 2 + (szz - sx) ** 2) + 3 * (txy * txy + tyz * tyz + tzx * tzx));
+      if (v > maxVm) maxVm = v;
+      // across-layer: traction on the layer plane (normal = build direction)
+      const tx = sx * bnx + txy * bny + tzx * bnz, ty = txy * bnx + sy * bny + tyz * bnz, tz = tzx * bnx + tyz * bny + szz * bnz;
+      const sn = tx * bnx + ty * bny + tz * bnz;
+      const shear = Math.hypot(tx - sn * bnx, ty - sn * bny, tz - sn * bnz);
+      const across = Math.max(sn, 0) + 0.5 * shear;
+      if (across > maxSz) maxSz = across;
+    }
+    vm[e] = maxVm;
+    sz[e] = maxSz;
+    const sfXY = (mat.tensileXY * knock) / Math.max(maxVm, 1e-9);
+    const sfZ = (mat.tensileZ * knock) / Math.max(maxSz, 1e-9);
+    sf[e] = Math.min(sfXY, sfZ, 999);
+  }
+  let maxU = 0, maxUAt = 0;
+  for (let i = 0; i < nNodes; i++) {
+    const d = Math.hypot(u[i * 3], u[i * 3 + 1], u[i * 3 + 2]);
+    if (d > maxU) { maxU = d; maxUAt = nodeOfDof[i]; }
+  }
+  return {
+    grid,
+    elements: Int32Array.from(elements),
+    vonMises: vm,
+    sigmaZ: sz,
+    safety: sf,
+    maxDisplacement: maxU,
+    maxDisplacementAt: nodePos(maxUAt),
+    iterations: it,
+    converged,
+    droppedElements: dropped,
+  };
+}
+
+function dot(a: Float64Array, b: Float64Array): number {
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += a[i] * b[i];
+  return s;
+}
+
+/**
+ * Printed parts are not solid: thin walls + sparse infill carry less than the datasheet.
+ * 1.0 for fully solid, ~0.7 for default 2 walls / 15% infill on chunky parts.
+ */
+export function strengthKnockdown(part: Part): number {
+  return 0.55 + 0.45 * part.estimateGrams().solidFraction;
+}
+
+export function elementCenter(res: FeaResult, e: number): [number, number, number] {
+  const g = res.grid;
+  const v = res.elements[e];
+  const i = v % g.nx, j = Math.floor(v / g.nx) % g.ny, k = Math.floor(v / (g.nx * g.ny));
+  return [g.origin[0] + (i + 0.5) * g.size, g.origin[1] + (j + 0.5) * g.size, g.origin[2] + (k + 0.5) * g.size];
+}
+
+export type StrengthData = {
+  minSafetyFactor: number;
+  weakestAt: [number, number, number];
+  /** "across-layers" means the part would split between layers — reorienting helps */
+  failureMode: "along-layers" | "across-layers";
+  maxVonMises: number;
+  maxAcrossLayerStress: number;
+  maxDeflection: number;
+  maxDeflectionAt: [number, number, number];
+  elements: number;
+  elementSize: number;
+  iterations: number;
+  converged: boolean;
+  strengthKnockdown: number;
+  hotspots: { at: [number, number, number]; safety: number; mode: string }[];
+};
+
+export function checkStrength(part: Part, lc: LoadCase, opts: FeaOptions & { requiredSafety?: number } = {}): CheckResult<StrengthData> & { fea: FeaResult } {
+  const res = solveFea(part, lc, opts);
+  const need = opts.requiredSafety ?? 2;
+  const mat = part.material;
+  const knock = strengthKnockdown(part);
+  // rank elements by safety, ignore the one-element-thick shell touching point loads (singular)
+  const order = Array.from(res.safety.keys()).sort((a, b) => res.safety[a] - res.safety[b]);
+  const hotspots: StrengthData["hotspots"] = [];
+  for (const e of order) {
+    const at = elementCenter(res, e);
+    if (hotspots.some((h) => Math.hypot(h.at[0] - at[0], h.at[1] - at[1], h.at[2] - at[2]) < 8)) continue;
+    const across = (mat.tensileZ * knock) / Math.max(res.sigmaZ[e], 1e-9) < (mat.tensileXY * knock) / Math.max(res.vonMises[e], 1e-9);
+    hotspots.push({ at: r3(at), safety: r2(res.safety[e]), mode: across ? "across-layers" : "along-layers" });
+    if (hotspots.length >= 5) break;
+  }
+  const weakest = hotspots[0];
+  let maxVm = 0, maxSz = 0;
+  for (let e = 0; e < res.elements.length; e++) { maxVm = Math.max(maxVm, res.vonMises[e]); maxSz = Math.max(maxSz, res.sigmaZ[e]); }
+  const sfMin = weakest?.safety ?? 999;
+  const status = !res.converged ? "warn" : sfMin < 1 ? "fail" : sfMin < need ? "warn" : "pass";
+  const findings: Finding[] = hotspots.map((h) => ({
+    status: h.safety < 1 ? "fail" : h.safety < need ? "warn" : "pass",
+    message: `Safety factor ${h.safety} at (${h.at.join(", ")}) — ${h.mode === "across-layers" ? "layers would split apart here" : "material would yield/crack here"}.`,
+    at: h.at,
+  }));
+  if (!res.converged) findings.push({ status: "warn", message: `Solver stopped after ${res.iterations} iterations without full convergence; numbers are approximate.` });
+  if (res.droppedElements) findings.push({ status: "info", message: `${res.droppedElements} voxels not connected to the fixed region were ignored.` });
+  const fixes: string[] = [];
+  if (status !== "pass") {
+    if (weakest?.mode === "across-layers") fixes.push("The weak spot is pulled across layers: rotate the part so the load runs along the layers (lay it on its side), or add a fillet/gusset there.");
+    fixes.push(`Thicken the section near (${weakest?.at.join(", ")}) or add a fillet (r ≥ 2 mm) to spread the stress.`);
+    fixes.push("In Bambu Studio raise wall loops to 4–6 and infill to 30–40% (walls add far more strength than infill).");
+    if (mat.id === "PLA") fixes.push("PETG or PLA-CF handles impact/creep better than PLA for loaded parts.");
+  }
+  return {
+    id: "strength",
+    title: "Strength under load",
+    status,
+    summary: `Minimum safety factor ${r2(sfMin)} (need ≥ ${need}) — ${weakest?.mode === "across-layers" ? "limited by layer adhesion" : "limited by material strength"}; max deflection ${r2(res.maxDisplacement)} mm.`,
+    accuracy: "rough-guide",
+    findings,
+    fixes,
+    data: {
+      minSafetyFactor: r2(sfMin),
+      weakestAt: weakest?.at ?? [0, 0, 0],
+      failureMode: (weakest?.mode as StrengthData["failureMode"]) ?? "along-layers",
+      maxVonMises: r2(maxVm),
+      maxAcrossLayerStress: r2(maxSz),
+      maxDeflection: r2(res.maxDisplacement),
+      maxDeflectionAt: r3(res.maxDisplacementAt),
+      elements: res.elements.length,
+      elementSize: r2(res.grid.size),
+      iterations: res.iterations,
+      converged: res.converged,
+      strengthKnockdown: r2(knock),
+      hotspots,
+    },
+    fea: res,
+  };
+}
+

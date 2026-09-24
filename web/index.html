@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>phyx3d — pre-print simulator</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='5' y='13' width='22' height='14' rx='2' fill='%237c8cff'/><rect x='10' y='5' width='12' height='8' rx='1.5' fill='%23e8eaf2'/></svg>" />
+  </head>
+  <body>
+    <div id="app">
+      <aside id="side">
+        <header class="brand">
+          <div class="logo">phyx<span>3d</span></div>
+          <div class="tag">test before you print</div>
+        </header>
+
+        <section class="panel" id="open-panel">
+          <label class="drop" id="drop">
+            <input type="file" id="file" accept=".stl,.3mf,.gcode,.gco,.g" hidden />
+            <strong>Drop a file</strong>
+            <span>STL · 3MF · G-code · Bambu .gcode.3mf</span>
+          </label>
+          <div class="examples">
+            <span class="muted">Examples</span>
+            <button data-example="shelf_bracket.stl">Bracket</button>
+            <button data-example="phone_stand.stl">Phone stand</button>
+            <button data-example="wall_hook.stl">Hook</button>
+            <button data-example="bad_tower.stl">Bad tower</button>
+          </div>
+        </section>
+
+        <section class="panel" id="settings">
+          <h3>Print settings</h3>
+          <div class="grid2">
+            <label>Printer<select id="printer"></select></label>
+            <label>Material<select id="material"></select></label>
+            <label>Infill <output id="infill-out">15%</output><input id="infill" type="range" min="0" max="100" value="15" /></label>
+            <label>Walls<input id="walls" type="number" min="1" max="10" value="2" /></label>
+          </div>
+          <label class="rot">Orientation (° X, Y, Z)
+            <span class="row"><input id="rx" type="number" value="0" step="15" /><input id="ry" type="number" value="0" step="15" /><input id="rz" type="number" value="0" step="15" /></span>
+          </label>
+          <div class="row gap">
+            <button id="btn-orient" class="ghost">Find best orientation</button>
+            <button id="btn-rot-reset" class="ghost small">Reset</button>
+          </div>
+          <div id="orient-list"></div>
+        </section>
+
+        <section class="panel grow" id="report-panel">
+          <div class="verdict" id="verdict"><span class="muted">Open a model to start.</span></div>
+          <div id="checks"></div>
+        </section>
+      </aside>
+
+      <main id="stage">
+        <div id="viewport"></div>
+        <div class="toolbar" id="overlays">
+          <button data-ov="overhangs" class="on">Overhangs</button>
+          <button data-ov="stability" class="on">Balance</button>
+          <button data-ov="markers" class="on">Problems</button>
+          <button data-ov="stress">Stress</button>
+          <button data-ov="bed" class="on">Plate</button>
+        </div>
+        <div class="toolbar right" id="views">
+          <button data-view="iso">3D</button>
+          <button data-view="front">Front</button>
+          <button data-view="side">Side</button>
+          <button data-view="top">Top</button>
+          <button data-view="below">Below</button>
+        </div>
+        <div id="busy" hidden><div class="spinner"></div><span id="busy-text">Analysing…</span></div>
+        <div id="hint" class="hint" hidden></div>
+
+        <div id="gcode-bar" hidden>
+          <button id="gc-play" class="icon" title="Play">▶</button>
+          <input id="gc-layer" type="range" min="1" max="1" value="1" />
+          <output id="gc-layer-out">layer 1</output>
+          <label class="chk"><input id="gc-travel" type="checkbox" /> travel</label>
+          <label class="chk"><input id="gc-air" type="checkbox" checked /> show over-air</label>
+          <label class="chk"><input id="gc-model" type="checkbox" /> 3D model</label>
+          <div id="gc-legend"></div>
+        </div>
+
+        <div id="sim-bar" hidden>
+          <button id="sim-play" class="icon" title="Replay">↻</button>
+          <input id="sim-time" type="range" min="0" max="1000" value="0" />
+          <output id="sim-out"></output>
+          <select id="sim-trial"></select>
+          <button id="sim-close" class="ghost small">Back to model</button>
+        </div>
+      </main>
+
+      <aside id="tools">
+        <nav class="tabs">
+          <button data-tab="stress" class="on">Strength</button>
+          <button data-tab="physics">Physics</button>
+          <button data-tab="mech">Mechanism</button>
+          <button data-tab="gcode">G-code</button>
+          <button data-tab="agent">Agent <span id="agent-dot"></span></button>
+        </nav>
+
+        <section class="tab on" id="tab-stress">
+          <p class="muted">Hold the part somewhere, push somewhere else. Faces are in the design's axes.</p>
+          <label>Held at<select id="fixed">
+            <option value="-x">back (-X face)</option><option value="bottom">bottom</option><option value="+x">+X face</option>
+            <option value="-y">-Y face</option><option value="+y">+Y face</option><option value="top">top</option>
+          </select></label>
+          <label>Load at<select id="load-at">
+            <option value="rel:0.8,0,0:1,1,1">far end (+X 20%)</option><option value="top">top face</option><option value="+x">+X face</option>
+            <option value="-y">-Y face</option><option value="+y">+Y face</option><option value="pick">click on the model…</option>
+          </select></label>
+          <div class="grid2">
+            <label>Force (N)<input id="force" type="number" value="30" min="0" step="5" /></label>
+            <label>Direction<select id="force-dir">
+              <option value="0,0,-1">down (−Z)</option><option value="0,0,1">up (+Z)</option><option value="1,0,0">+X</option>
+              <option value="-1,0,0">−X</option><option value="0,1,0">+Y</option><option value="0,-1,0">−Y</option>
+            </select></label>
+          </div>
+          <p class="muted small" id="force-hint">10 N ≈ 1 kg hanging on it.</p>
+          <label>Detail<select id="fea-res"><option value="8000">fast</option><option value="25000" selected>normal</option><option value="60000">fine (slow)</option></select></label>
+          <button id="btn-stress" class="primary">Run strength test</button>
+          <div id="stress-result" class="result"></div>
+        </section>
+
+        <section class="tab" id="tab-physics">
+          <p class="muted">Real rigid-body physics (Rapier) with the printed weight and friction.</p>
+          <div class="sim-cards">
+            <button class="card" data-sim="drop"><b>Drop</b><span>fall onto the floor, random angles, impact stress</span></button>
+            <button class="card" data-sim="tilt"><b>Tilt</b><span>tilt the table until it tips or slides</span></button>
+            <button class="card" data-sim="push"><b>Push</b><span>push the top sideways</span></button>
+            <button class="card" data-sim="stack"><b>Stack</b><span>stack copies on top of each other</span></button>
+          </div>
+          <div class="grid2">
+            <label>Drop height (mm)<input id="drop-h" type="number" value="750" step="50" /></label>
+            <label>Floor<select id="drop-floor"><option>tile</option><option>concrete</option><option selected>wood</option><option>carpet</option></select></label>
+            <label>Stack copies<input id="stack-n" type="number" value="3" min="2" max="8" /></label>
+          </div>
+          <div id="physics-result" class="result"></div>
+        </section>
+
+        <section class="tab" id="tab-mech">
+          <p class="muted">Robots, vehicles, arms and linkages: printed parts + joints + real servo/motor limits, in real physics.</p>
+          <div class="examples">
+            <span class="muted">Examples</span>
+            <button data-mech="rover.mech.json">Rover</button>
+            <button data-mech="walker.mech.json">Walker</button>
+            <button data-mech="arm/arm.mech.json">Arm</button>
+            <button data-mech="crank_slider.mech.json">Crank</button>
+          </div>
+          <label class="drop small-drop" id="mech-drop">
+            <input type="file" id="mech-file" accept=".json,.stl,.3mf" multiple hidden />
+            <span>Open <b>.mech.json</b> + its STL parts (select them together)</span>
+          </label>
+          <details id="mech-edit-box">
+            <summary class="muted">Edit spec</summary>
+            <textarea id="mech-json" spellcheck="false"></textarea>
+          </details>
+          <div class="grid2">
+            <label>Duration (s)<input id="mech-dur" type="number" value="" placeholder="from spec" min="0.5" max="60" step="0.5" /></label>
+            <label class="chk follow"><input id="mech-follow" type="checkbox" checked /> camera follows</label>
+          </div>
+          <button id="btn-mech" class="primary">Simulate</button>
+          <div id="mech-result" class="result"></div>
+        </section>
+
+        <section class="tab" id="tab-gcode">
+          <p class="muted">Open a sliced <b>.gcode.3mf</b> (Bambu Studio → File → Export → Export plate sliced file) or <b>.gcode</b> to replay it layer by layer.</p>
+          <div id="gcode-result" class="result"></div>
+        </section>
+
+        <section class="tab" id="tab-agent">
+          <p class="muted" id="agent-status">Checks run by Claude Code (via the phyx3d MCP server) appear here live when you open the app with <code>phyx3d serve</code>.</p>
+          <label class="chk"><input id="follow" type="checkbox" checked /> open new runs automatically</label>
+          <div id="runs"></div>
+        </section>
+      </aside>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

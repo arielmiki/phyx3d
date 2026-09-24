@@ -1,0 +1,46 @@
+{
+  "name": "phyx3d",
+  "version": "0.1.0",
+  "description": "Pre-print physics, stability and strength checks for 3D prints \u2014 for humans (web app) and AI agents (MCP/CLI)",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "phyx3d": "dist/cli.js",
+    "phyx3d-mcp": "dist/mcp.js"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsup && vite build",
+    "build:node": "tsup",
+    "serve": "node dist/cli.js serve",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.20.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "commander": "^15.0.0",
+    "fflate": "^0.8.3",
+    "three": "^0.186.0",
+    "three-mesh-bvh": "^0.9.15",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "@types/three": "^0.186.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "examples",
+    "README.md"
+  ]
+}
