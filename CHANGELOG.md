@@ -5,12 +5,6 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-### Added
-- `phyx3d mcp` runs the MCP server, so MCP clients can use `npx -y phyx3d mcp` without a path.
-- `phyx3d install-skill` copies the print-design skill into `~/.claude/skills`.
-- Package builds itself when run from GitHub (`npx -y github:arielmiki/phyx3d`) and before publishing.
-- Release workflow: pushing a `v*` tag publishes to npm with provenance.
-
 ## [0.1.0] - 2026-09-24
 
 First public release.
@@ -27,3 +21,10 @@ First public release.
 - G-code and Bambu `.gcode.3mf` loading, layer replay and over-air extrusion check; optional Bambu Studio slicing.
 - Software renderer producing annotated PNG reports and mechanism filmstrips.
 - Interfaces: web app (three.js), CLI, MCP server, and the `print-design` skill for Claude Code.
+- `phyx3d mcp` runs the MCP server, so MCP clients can use `npx -y phyx3d mcp` without a path.
+- `phyx3d install-skill` copies the print-design skill into `~/.claude/skills`.
+- Package builds itself when run from GitHub (`npx -y github:arielmiki/phyx3d`) and before publishing.
+- Release workflow: pushing a `v*` tag publishes to npm with provenance.
+
+[Unreleased]: https://github.com/arielmiki/phyx3d/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/arielmiki/phyx3d/releases/tag/v0.1.0
