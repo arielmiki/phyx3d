@@ -194,7 +194,7 @@ This integration is the least-tested part of phyx3d; reports and fixes are very 
 The engine in `src/core` is plain TypeScript with no native dependencies, so the same code runs in Node (CLI, MCP
 server) and in the browser (web app, inside a Web Worker). See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
-![phyx3d components](docs/diagrams/architecture.svg)
+![phyx3d components](docs/diagrams/architecture.png)
 
 ```
 src/core/     engine: loaders, mesh & voxel geometry, printability, stability, warp, FEA, physics,

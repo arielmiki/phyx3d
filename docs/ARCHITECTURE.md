@@ -2,10 +2,11 @@
 
 phyx3d is one TypeScript engine with three front-ends.
 
-![phyx3d components](diagrams/architecture.svg)
+![phyx3d components](diagrams/architecture.png)
 
-Diagrams are written in PlantUML: sources are in [`docs/diagrams/`](diagrams) (`*.puml`); regenerate the SVGs with
-`plantuml -tsvg docs/diagrams/*.puml`.
+The system overview is an Excalidraw drawing, committed as its exported PNG. The sequence, activity and class
+diagrams below are PlantUML: sources in [`docs/diagrams/`](diagrams) (`*.puml`), regenerate the SVGs with
+`plantuml -tsvg -failfast2 docs/diagrams/*.puml`.
 
 ## Core modules (`src/core`)
 

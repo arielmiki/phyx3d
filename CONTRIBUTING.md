@@ -31,8 +31,10 @@ Web app with hot reload: run `phyx3d serve` (API on :5217) and `npm run dev` (Vi
 `/api`). The engine lives in `src/core` and must stay free of Node-only APIs so it keeps running in the browser;
 Node-specific code goes in `src/node`. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-Diagrams are PlantUML files in `docs/diagrams/`. After editing one, regenerate the SVGs with
-`plantuml -tsvg docs/diagrams/*.puml` and commit both.
+Diagrams live in `docs/diagrams/`. System diagrams are drawn in [Excalidraw](https://excalidraw.com) and
+committed as the exported PNG. Sequence, activity and class diagrams are PlantUML: after editing a `.puml`,
+regenerate with `plantuml -tsvg -failfast2 docs/diagrams/*.puml` (don't pipe it — a failed render still writes
+an SVG, and the exit code is the only warning), open the result, and commit the `.puml` and `.svg` together.
 
 To try your MCP changes in Claude Code, point it at your build
 (`claude mcp add phyx3d-dev -- node /path/to/phyx3d/dist/cli.js mcp`), rebuild with `npm run build` and restart
