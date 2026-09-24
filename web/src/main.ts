@@ -45,6 +45,14 @@ try {
   if (saved.material) ($("#material") as HTMLSelectElement).value = saved.material;
 } catch { /* storage unavailable */ }
 
+// short screens (laptops): start with print settings collapsed so the verdict is visible
+if (window.innerHeight < 820) ($("#settings") as HTMLDetailsElement).open = false;
+function updateSettingsSummary() {
+  const o = partOptions();
+  const rot = o.rotate?.some((a) => a) ? ` · rot ${o.rotate.join(",")}` : "";
+  $("#settings-sum").textContent = `${o.printer} · ${o.material} · ${Math.round((o.settings?.infill ?? 0) * 100)}% · ${o.settings?.walls} walls${rot}`;
+}
+
 function partOptions(): PartOptions {
   const num = (id: string) => +($(id) as HTMLInputElement).value || 0;
   return {
@@ -59,6 +67,7 @@ let reanalyzeTimer = 0;
 function scheduleAnalyze() {
   try { localStorage.setItem("phyx3d.settings", JSON.stringify({ printer: ($("#printer") as HTMLSelectElement).value, material: ($("#material") as HTMLSelectElement).value })); } catch { /* ignore */ }
   clearTimeout(reanalyzeTimer);
+  updateSettingsSummary();
   reanalyzeTimer = window.setTimeout(() => runAnalyze(), 250);
 }
 for (const id of ["#printer", "#material", "#walls", "#rx", "#ry", "#rz"]) $(id).addEventListener("change", scheduleAnalyze);
@@ -132,6 +141,7 @@ function showError(e: Error) { console.error(e); toast(`⚠ ${e.message}`); }
 // ------------------------------------------------------------------ analysis
 async function runAnalyze() {
   if (!state.meshId) return;
+  updateSettingsSummary();
   const a = await busy("Analysing…", () => call<AnalyzeRes>({ type: "analyze", meshId: state.meshId, opts: partOptions() })).catch((e) => { showError(e); return null; });
   if (!a) return;
   const first = !state.analysis;
@@ -579,6 +589,8 @@ try {
   es.onopen = () => refreshRuns(false);
 } catch { /* no server */ }
 setInterval(() => { if (serverMode) refreshRuns(true); }, 8000);
+
+updateSettingsSummary();
 
 // start with something on screen
 openUrl("examples/shelf_bracket.stl", "shelf_bracket.stl").catch(() => undefined);

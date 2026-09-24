@@ -5,6 +5,13 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-24
+
+### Fixed
+- Web app on laptop screens (e.g. MacBook Air, 1280×720 – 1470×900): side panels scale with the window, the viewport
+  toolbars wrap instead of overlapping, compact spacing, and print settings collapse on short screens so the verdict
+  stays visible.
+
 ## [0.1.0] - 2026-09-24
 
 First public release.
@@ -26,5 +33,6 @@ First public release.
 - Package builds itself when run from GitHub (`npx -y github:arielmiki/phyx3d`) and before publishing.
 - Release workflow: pushing a `v*` tag publishes to npm via trusted publishing (OIDC), with provenance.
 
-[Unreleased]: https://github.com/arielmiki/phyx3d/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/arielmiki/phyx3d/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/arielmiki/phyx3d/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/arielmiki/phyx3d/releases/tag/v0.1.0

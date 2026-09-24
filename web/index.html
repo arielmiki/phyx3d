@@ -29,8 +29,8 @@
           </div>
         </section>
 
-        <section class="panel" id="settings">
-          <h3>Print settings</h3>
+        <details class="panel" id="settings" open>
+          <summary><h3>Print settings</h3><span class="muted small" id="settings-sum"></span></summary>
           <div class="grid2">
             <label>Printer<select id="printer"></select></label>
             <label>Material<select id="material"></select></label>
@@ -45,7 +45,7 @@
             <button id="btn-rot-reset" class="ghost small">Reset</button>
           </div>
           <div id="orient-list"></div>
-        </section>
+        </details>
 
         <section class="panel grow" id="report-panel">
           <div class="verdict" id="verdict"><span class="muted">Open a model to start.</span></div>
@@ -55,6 +55,7 @@
 
       <main id="stage">
         <div id="viewport"></div>
+        <div class="stage-top">
         <div class="toolbar" id="overlays">
           <button data-ov="overhangs" class="on">Overhangs</button>
           <button data-ov="stability" class="on">Balance</button>
@@ -68,6 +69,7 @@
           <button data-view="side">Side</button>
           <button data-view="top">Top</button>
           <button data-view="below">Below</button>
+        </div>
         </div>
         <div id="busy" hidden><div class="spinner"></div><span id="busy-text">Analysing…</span></div>
         <div id="hint" class="hint" hidden></div>
