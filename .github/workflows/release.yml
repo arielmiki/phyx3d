@@ -3,7 +3,9 @@ name: Release
 # Publish to npm when a version tag is pushed:
 #   npm version patch   # or minor / major — bumps package.json and creates the tag
 #   git push --follow-tags
-# Needs the repository secret NPM_TOKEN (an npm "Automation" or granular access token).
+# Uses npm Trusted Publishing (OIDC) — no token. One-time setup on npmjs.com:
+#   package phyx3d → Settings → Trusted Publisher → GitHub Actions:
+#   owner arielmiki, repository phyx3d, workflow release.yml
 
 on:
   push:
@@ -11,7 +13,7 @@ on:
 
 permissions:
   contents: write
-  id-token: write # npm provenance
+  id-token: write # npm trusted publishing (OIDC) + provenance
 
 jobs:
   publish:
@@ -26,14 +28,14 @@ jobs:
           node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
+      - name: npm with trusted-publishing support (≥ 11.5.1)
+        run: npm install -g npm@latest
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
       - name: Check the tag matches package.json
         run: test "v$(node -p 'require(`./package.json`).version')" = "${GITHUB_REF_NAME}"
       - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: GitHub release
         run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "See CHANGELOG.md"
         env:

@@ -24,7 +24,7 @@ First public release.
 - `phyx3d mcp` runs the MCP server, so MCP clients can use `npx -y phyx3d mcp` without a path.
 - `phyx3d install-skill` copies the print-design skill into `~/.claude/skills`.
 - Package builds itself when run from GitHub (`npx -y github:arielmiki/phyx3d`) and before publishing.
-- Release workflow: pushing a `v*` tag publishes to npm with provenance.
+- Release workflow: pushing a `v*` tag publishes to npm via trusted publishing (OIDC), with provenance.
 
 [Unreleased]: https://github.com/arielmiki/phyx3d/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/arielmiki/phyx3d/releases/tag/v0.1.0
