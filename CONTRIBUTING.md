@@ -20,21 +20,23 @@ Requires Node.js 20+. Either npm or pnpm works (the repo includes a `pnpm-lock.y
 ```bash
 git clone https://github.com/arielmiki/phyx3d.git
 cd phyx3d
-npm install
-npm run build        # dist/cli.js, dist/mcp.js, dist/web
+npm install          # installs and builds dist/ (cli.js, mcp.js, web/)
+npm link             # optional: use your local build as the `phyx3d` command
 npm test             # vitest
 npm run typecheck
+npm run build        # rebuild after changes
 ```
 
-Web app with hot reload: run `node dist/cli.js serve` (API on :5217) and `npm run dev` (Vite on :5173, proxies
+Web app with hot reload: run `phyx3d serve` (API on :5217) and `npm run dev` (Vite on :5173, proxies
 `/api`). The engine lives in `src/core` and must stay free of Node-only APIs so it keeps running in the browser;
 Node-specific code goes in `src/node`. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Diagrams are PlantUML files in `docs/diagrams/`. After editing one, regenerate the SVGs with
 `plantuml -tsvg docs/diagrams/*.puml` and commit both.
 
-To try your MCP changes in Claude Code, rebuild (`npm run build`) and restart the client — the server runs from
-`dist/mcp.js`.
+To try your MCP changes in Claude Code, point it at your build
+(`claude mcp add phyx3d-dev -- node /path/to/phyx3d/dist/cli.js mcp`), rebuild with `npm run build` and restart
+the client.
 
 ## Pull requests
 

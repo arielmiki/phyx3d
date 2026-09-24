@@ -55,11 +55,14 @@ crank-slider stroke, and servo holding torque = m·g·r. **Strength results are 
 Requires **Node.js 20 or newer**.
 
 ```bash
-git clone https://github.com/arielmiki/phyx3d.git
-cd phyx3d
-npm install            # or: pnpm install
-npm run build
-node dist/cli.js serve # → http://localhost:5217
+npx phyx3d serve                  # web app → http://localhost:5217, nothing to install
+```
+
+or install the `phyx3d` command:
+
+```bash
+npm install -g phyx3d                          # from npm
+npm install -g github:arielmiki/phyx3d         # or straight from GitHub (builds on install)
 ```
 
 Try it without your own models: the web app has example parts (bracket, phone stand, hook, a deliberately bad
@@ -68,17 +71,19 @@ tower) and example mechanisms (rover, walking robot, robot arm, crank-slider).
 ### Command line
 
 ```bash
-node dist/cli.js check part.stl -m PETG --png report.png   # all printability checks + picture
-node dist/cli.js orient part.stl                           # best print orientations
-node dist/cli.js stress bracket.stl --fixed -x --force "rel:0.8,0,0:1,1,1=0,0,-50"
-node dist/cli.js drop part.stl --height 750 --floor wood   # also: tilt, push, stack
-node dist/cli.js mech examples/mechanisms/walker.mech.json --png walk.png
-node dist/cli.js gcode plate_1.gcode.3mf
-node dist/cli.js materials                                 # material presets
+phyx3d check part.stl -m PETG --png report.png     # all printability checks + picture
+phyx3d orient part.stl                             # best print orientations
+phyx3d stress bracket.stl --fixed -x --force "rel:0.8,0,0:1,1,1=0,0,-50"
+phyx3d drop part.stl --height 750 --floor wood     # also: tilt, push, stack
+phyx3d mech robot.mech.json --png walk.png         # robots & mechanisms
+phyx3d gcode plate_1.gcode.3mf
+phyx3d serve                                       # web app
+phyx3d materials                                   # material presets
+phyx3d --help                                      # everything else
 ```
 
 Add `--json` to any command for machine-readable output. `check` exits with code 2 when the part needs changes,
-so you can use it in CI. Run `npm link` once to use `phyx3d` instead of `node dist/cli.js`.
+so you can use it in CI.
 
 Regions for `--fixed` / `--force`: `bottom|top|-x|+x|-y|+y`, `box:x0,y0,z0:x1,y1,z1`, `sphere:x,y,z:r`, or
 `rel:fx0,fy0,fz0:fx1,fy1,fz1` (fractions of the part's size — usually the easiest).
@@ -92,12 +97,12 @@ The MCP server gives an agent these tools: `analyze_model`, `suggest_orientation
 `simulate_physics`, `simulate_mechanism`, `render_view`, `check_gcode`, `slice_bambu`, `list_materials`.
 Results come back as JSON **plus a picture**, so the agent can see what is wrong.
 
-Build first (see Quick start), then register the server with the absolute path to `dist/mcp.js`:
+Register the server — no clone or build needed:
 
 **Claude Code**
 
 ```bash
-claude mcp add --scope user phyx3d -- node /absolute/path/to/phyx3d/dist/mcp.js
+claude mcp add --scope user phyx3d -- npx -y phyx3d mcp
 ```
 
 **Claude Desktop** (`claude_desktop_config.json`) / **Cursor** (`~/.cursor/mcp.json`) / other MCP clients
@@ -105,10 +110,12 @@ claude mcp add --scope user phyx3d -- node /absolute/path/to/phyx3d/dist/mcp.js
 ```json
 {
   "mcpServers": {
-    "phyx3d": { "command": "node", "args": ["/absolute/path/to/phyx3d/dist/mcp.js"] }
+    "phyx3d": { "command": "npx", "args": ["-y", "phyx3d", "mcp"] }
   }
 }
 ```
+
+If you installed it globally, `phyx3d mcp` works as the command too.
 
 For the full *design → test → fix* loop, pair it with a CAD MCP server such as
 [build123d-mcp](https://github.com/pzfreo/build123d-mcp) (Python CAD) and install the included skill, which teaches
@@ -116,7 +123,7 @@ the agent the workflow (modelling rules, which checks to run, how to report):
 
 ```bash
 claude mcp add --scope user build123d -- uv tool run --python 3.12 build123d-mcp@latest
-cp -r skills/print-design ~/.claude/skills/    # or symlink it
+npx phyx3d install-skill        # copies the print-design skill to ~/.claude/skills
 ```
 
 Then ask, for example: *"Design a wall hook that holds a 1 kg bag, in PLA, and make sure it prints on my P1S"* or
@@ -199,13 +206,13 @@ test/         vitest suites, including physics / FEA / mechanism validation
 ## Contributing
 
 Bug reports, printer and material presets, validation cases against real prints, and pull requests are welcome —
-see [CONTRIBUTING.md](CONTRIBUTING.md). Development in short:
+see [CONTRIBUTING.md](CONTRIBUTING.md). Working from a clone:
 
 ```bash
-npm install
-npm test            # vitest
-npm run typecheck
-npm run dev         # web app with hot reload (API proxied to `node dist/cli.js serve`)
+git clone https://github.com/arielmiki/phyx3d.git && cd phyx3d
+npm install         # also builds dist/
+npm link            # puts your local build on PATH as `phyx3d`
+npm test
 ```
 
 ## License & credits

@@ -36,9 +36,9 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
     "skills",
     "examples",
-    "docs",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
@@ -47,6 +47,7 @@
     "dev": "vite",
     "build": "tsup && vite build",
     "build:node": "tsup",
+    "prepare": "npm run build",
     "serve": "node dist/cli.js serve",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

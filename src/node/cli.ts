@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 // phyx3d command line — every command prints a readable report, or JSON with --json.
 import { Command } from "commander";
-import { writeFileSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync, mkdirSync, cpSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   analyze, renderReport, suggestOrientations, checkStrength, dropTest, tiltTest, pushTest, stackTest, checkGcode,
   Part, MATERIALS, PRINTERS, buildReport, type CheckResult, type Region, type LoadCase, type Report, type VisualMode, type FloorType,
@@ -9,6 +12,12 @@ import {
 import { loadPath, requireMesh, compactReport, compactCheck, saveRun, parseVec, runMechanismFile, saveMechanismRun } from "./shared.js";
 import { sliceWithBambu, findBambuStudio } from "./slice.js";
 import { startServer } from "./server.js";
+
+/** package root: dist/cli.js → .. ; src/node/cli.ts → ../.. */
+const HERE = dirname(fileURLToPath(import.meta.url));
+const PKG_ROOT = existsSync(join(HERE, "..", "package.json")) ? join(HERE, "..") : join(HERE, "..", "..");
+
+const PKG_VERSION: string = (() => { try { return JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).version; } catch { return "0.0.0"; } })();
 
 const ICON: Record<string, string> = { pass: "✅", warn: "⚠️ ", fail: "❌", info: "ℹ️ " };
 
@@ -55,7 +64,7 @@ const partOpts = (o: Record<string, string>) => ({
 });
 
 const program = new Command();
-program.name("phyx3d").description("Test 3D prints before printing: printability, stability, physics and strength.").version("0.1.0");
+program.name("phyx3d").description("Test 3D prints before printing: printability, stability, physics, strength and mechanisms.").version(PKG_VERSION);
 
 common(program.command("check <file>").description("run all printability & stability checks (STL, 3MF, .gcode.3mf)"))
   .option("--png <file>", "also save an annotated picture")
@@ -188,6 +197,23 @@ program.command("slice <file>").description("slice with Bambu Studio (must be in
 program.command("serve").description("open the web app (shows your files and the agent's latest runs)")
   .option("--port <n>", "port", "5217")
   .action(async (o) => { await startServer(+o.port); });
+
+program.command("mcp").description("run the MCP server on stdio (for Claude Code, Claude Desktop, Cursor, …)").action(async () => {
+  await import("./mcp.js");
+});
+
+program.command("install-skill").description("install the print-design skill for Claude Code (~/.claude/skills)")
+  .option("--dir <path>", "skills folder", join(homedir(), ".claude", "skills"))
+  .option("--force", "overwrite an existing copy")
+  .action((o) => {
+    const src = [join(PKG_ROOT, "skills", "print-design")].find((d) => existsSync(join(d, "SKILL.md")));
+    if (!src) throw new Error("Skill files not found in this installation.");
+    const dest = join(o.dir, "print-design");
+    if (existsSync(dest) && !o.force) throw new Error(`${dest} already exists — use --force to overwrite it.`);
+    mkdirSync(o.dir, { recursive: true });
+    cpSync(src, dest, { recursive: true, force: true, dereference: true });
+    console.log(`Installed the print-design skill → ${dest}`);
+  });
 
 program.command("doctor").description("check the environment").action(() => {
   console.log(`node ${process.version}`);
