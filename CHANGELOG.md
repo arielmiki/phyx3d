@@ -5,6 +5,12 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-24
+
+### Fixed
+- Web app on Retina / HiDPI screens (e.g. MacBook): the 3D view drew at twice its size, covering the right-hand
+  panel and pushing the model off-centre. The canvas now stays inside its column at any screen scaling.
+
 ## [0.2.0] - 2026-09-24
 
 ### Added
@@ -54,7 +60,8 @@ First public release.
 - Package builds itself when run from GitHub (`npx -y github:arielmiki/phyx3d`) and before publishing.
 - Release workflow: pushing a `v*` tag publishes to npm via trusted publishing (OIDC), with provenance.
 
-[Unreleased]: https://github.com/arielmiki/phyx3d/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/arielmiki/phyx3d/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/arielmiki/phyx3d/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/arielmiki/phyx3d/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/arielmiki/phyx3d/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/arielmiki/phyx3d/releases/tag/v0.1.0
