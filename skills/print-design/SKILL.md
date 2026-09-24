@@ -18,7 +18,7 @@ Before modelling, pin down (ask only if you can't infer a sensible default):
 ## 2. Model it (build123d MCP)
 
 - Design with the build123d tools in small steps and look at their previews.
-- Millimetres, Z up. Put the intended print face at z = 0 when you can.
+- Millimetres, Z up. A single part: put the intended print face at z = 0. **Several parts that fit together** (an enclosure, a lid, modules): model each one in its **assembled position** so fit checks compare real geometry, and rotate it into print orientation only when exporting.
 - Printable-by-design rules: walls ≥ 1.2 mm (≥ 2 mm under load); 45° chamfers (not fillets) on downward edges; teardrop holes in vertical walls; fillet r ≥ 2 mm at inside corners that take load; avoid floating parts.
 - Export an **STL** to an absolute path (e.g. `./out/<name>.stl`).
 
@@ -29,6 +29,7 @@ Before modelling, pin down (ask only if you can't infer a sensible default):
 3. If the part carries load: `stress_test` with realistic `fixed` + `loads` in the **design's own axes**.
    `rel` regions are the easiest: `{rel:{min:[0.85,0,0],max:[1,1,1]}}` = the far 15 % along +X.
    Pass the chosen print `rotate` too — layer direction changes the strength. Aim for safety factor ≥ 2 (≥ 3 for impact/repeated loads).
+   **Snap-fits are different:** a snap moves by a fixed distance (barb reach + clearance), not under a known force. Probe with a 1 N load at the barb with a fine mesh (`resolution: 120000`), then scale: `SF_real = minSafetyFactor × maxDeflection / travel`. Force-guessed snap FEA, especially on a coarse mesh, can be wrong by large factors either way. Lay snap springs flat on the bed where possible, so they bend along the layers.
 4. If it must stand, stack, or survive knocks: `simulate_physics` with `tilt`, `push`, `stack` or `drop`.
 5. Optional, if Bambu Studio is installed: `slice_bambu` for exact time and filament.
 
@@ -48,6 +49,8 @@ Use `simulate_mechanism` whenever parts move relative to each other.
 ## 4. Fix and repeat
 
 Apply the `todo` fixes in the CAD, re-export, re-test. Iterate until the verdict is `ready`, or `printable-with-care` with every remaining warning explained. Usually 2–4 rounds.
+
+For enclosures and other multi-part assemblies, also follow the rules in mstack's [`3d-modelling`](https://github.com/arielmiki/mstack/tree/main/skills/3d-modelling) skill: fit checks against a model of the device, nudge tests for locks, slicer settings that break the design.
 
 ## 5. Report to the user
 
