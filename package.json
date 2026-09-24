@@ -1,13 +1,48 @@
 {
   "name": "phyx3d",
   "version": "0.1.0",
-  "description": "Pre-print physics, stability and strength checks for 3D prints \u2014 for humans (web app) and AI agents (MCP/CLI)",
-  "type": "module",
+  "description": "Test 3D prints before printing: printability, stability, strength (FEA), physics and robot/mechanism simulation — web app, CLI and MCP server for AI agents",
+  "keywords": [
+    "3d-printing",
+    "fdm",
+    "bambu-lab",
+    "stl",
+    "3mf",
+    "gcode",
+    "printability",
+    "fea",
+    "physics",
+    "robotics",
+    "simulation",
+    "mcp",
+    "claude",
+    "ai-agents",
+    "build123d"
+  ],
+  "homepage": "https://github.com/arielmiki/phyx3d#readme",
+  "bugs": {
+    "url": "https://github.com/arielmiki/phyx3d/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arielmiki/phyx3d.git"
+  },
   "license": "MIT",
+  "author": "phyx3d contributors",
+  "type": "module",
   "bin": {
     "phyx3d": "dist/cli.js",
     "phyx3d-mcp": "dist/mcp.js"
   },
+  "files": [
+    "dist",
+    "skills",
+    "examples",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsup && vite build",
@@ -36,11 +71,5 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.0",
     "vitest": "^5.0.1"
-  },
-  "files": [
-    "dist",
-    "skills",
-    "examples",
-    "README.md"
-  ]
+  }
 }

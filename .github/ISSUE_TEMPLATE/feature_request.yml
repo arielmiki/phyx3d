@@ -1,0 +1,15 @@
+name: Feature or preset request
+description: A new check, printer/material/motor preset, or improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What would you like phyx3d to do?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why / example
+      description: The print or project this would have helped with. For presets, link a datasheet or measurement.

@@ -50,7 +50,13 @@ Use `simulate_mechanism` whenever parts move relative to each other.
 
 Apply the `todo` fixes in the CAD, re-export, re-test. Iterate until the verdict is `ready`, or `printable-with-care` with every remaining warning explained. Usually 2–4 rounds.
 
-For enclosures and other multi-part assemblies, also follow the rules in mstack's [`3d-modelling`](https://github.com/arielmiki/mstack/tree/main/skills/3d-modelling) skill: fit checks against a model of the device, nudge tests for locks, slicer settings that break the design.
+For enclosures and other multi-part assemblies, also:
+- **Fit-check against a model of what goes inside** (board, battery, device): model it with its real dimensions and
+  check clearances in the assembled position, not by eye.
+- **Nudge-test locks and snaps:** move the part by the expected play (0.2–0.5 mm) and make sure the lock still holds
+  and nothing else collides.
+- **Watch for slicer settings that break the design:** elephant's foot on the first layer, seam placement on mating
+  faces, and hole shrinkage — say which settings (or compensation) the design assumes.
 
 ## 5. Report to the user
 

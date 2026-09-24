@@ -1,0 +1,47 @@
+@startuml check-flow
+skinparam backgroundColor #FFFFFF
+skinparam ArrowColor #3B4250
+skinparam BorderColor #3B4250
+skinparam RoundCorner 8
+skinparam ComponentBackgroundColor #EEF0FF
+skinparam ClassBackgroundColor #EEF0FF
+skinparam ActivityBackgroundColor #EEF0FF
+skinparam ParticipantBackgroundColor #EEF0FF
+skinparam PackageBackgroundColor #FAFBFF
+skinparam DatabaseBackgroundColor #FFF6E5
+skinparam ActorBackgroundColor #FFFFFF
+skinparam ActorBorderColor #3B4250
+skinparam ComponentBorderColor #5B6CF0
+skinparam ClassBorderColor #5B6CF0
+skinparam ActivityBorderColor #5B6CF0
+skinparam ActivityDiamondBorderColor #3B4250
+skinparam ActivityDiamondBackgroundColor #FFF6E5
+skinparam ParticipantBorderColor #5B6CF0
+skinparam PackageBorderColor #3B4250
+skinparam DatabaseBorderColor #3B4250
+skinparam SequenceLifeLineBorderColor #8B93A7
+skinparam defaultFontName Helvetica
+skinparam shadowing false
+title How a check runs (analyze_model / phyx3d check)
+
+participant "Agent / CLI / Web" as caller
+participant "loaders" as L
+participant "Part\n(context.ts)" as P
+participant "checks" as C
+participant "analyze" as A
+participant "render" as R
+
+caller -> L : loadFile(name, bytes)
+L --> caller : mesh (+ G-code, slice info)
+caller -> A : analyze(mesh, {material, printer, rotate, infill})
+A -> P : new Part(mesh)\nrotate · fix winding · rest on z = 0
+A -> C : mesh health · bed fit · overhangs · islands\nthin walls · stability · warp · estimate
+C -> P : voxels(), normals, mass properties (cached)
+C --> A : CheckResult[] (status, summary, findings, fixes, accuracy)
+opt load case given
+  A -> C : checkStrength(part, load) — FEA on design pose
+end
+A --> caller : Report (verdict, score, todo)
+caller -> R : renderReport(part, report, mode)
+R --> caller : PNG
+@enduml

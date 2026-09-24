@@ -1,0 +1,28 @@
+name: Bug report
+description: Something crashes, or a result is wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did phyx3d report, and what did you expect (or what happened when you printed it)?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: Command or MCP tool call, settings (material, printer, rotation, infill). Attach the model if you can — zip STL/3MF/.mech.json files.
+    validations:
+      required: true
+  - type: input
+    id: interface
+    attributes:
+      label: Interface
+      placeholder: web app / CLI / MCP (which client?)
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      placeholder: OS, Node version, phyx3d version or commit
