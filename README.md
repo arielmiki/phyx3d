@@ -61,9 +61,10 @@ npx phyx3d serve                  # web app → http://localhost:5217, nothing t
 or install the `phyx3d` command:
 
 ```bash
-npm install -g phyx3d                          # from npm
-npm install -g github:arielmiki/phyx3d         # or straight from GitHub (builds on install)
+npm install -g phyx3d
 ```
+
+The latest code from GitHub works the same way: `npx -y github:arielmiki/phyx3d serve` (it builds on first run).
 
 Try it without your own models: the web app has example parts (bracket, phone stand, hook, a deliberately bad
 tower) and example mechanisms (rover, walking robot, robot arm, crank-slider).
