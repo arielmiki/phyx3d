@@ -257,35 +257,51 @@ export function checkThinWalls(part: Part, samples = 6000): CheckResult {
       ray.direction.set(-nx, -ny, -nz);
       const hit = bvh.raycastFirst(ray, DoubleSide, 0, twoLines * 1.01);
       tested++;
-      if (hit && hit.distance < twoLines) hits.push({ at: [x, y, z], thickness: hit.distance + 1e-3, area: areas[t] / reps });
+      // A wall is two roughly parallel faces (within 30°). A ray that meets the far face at a steeper
+      // angle started beside a corner (a duct wall meeting an arm) or near a chamfered edge, which
+      // tapers to nothing at its tip without being a thin wall: skip it.
+      if (hit && hit.distance < twoLines && hit.face && -(nx * hit.face.normal.x + ny * hit.face.normal.y + nz * hit.face.normal.z) > 0.87)
+        hits.push({ at: [x, y, z], thickness: hit.distance + 1e-3, area: areas[t] / reps });
     }
   }
   // bucket hits into 5 mm cells so the agent gets locations, not thousands of points
-  const cells = new Map<string, { n: number; min: number; sx: number; sy: number; sz: number; area: number }>();
+  const cells = new Map<string, { t: number[]; sx: number; sy: number; sz: number; area: number }>();
   for (const h of hits) {
     const key = h.at.map((v) => Math.floor(v / 5)).join(",");
     let c = cells.get(key);
-    if (!c) cells.set(key, (c = { n: 0, min: Infinity, sx: 0, sy: 0, sz: 0, area: 0 }));
-    c.n++; c.min = Math.min(c.min, h.thickness); c.sx += h.at[0]; c.sy += h.at[1]; c.sz += h.at[2]; c.area += h.area;
+    if (!c) cells.set(key, (c = { t: [], sx: 0, sy: 0, sz: 0, area: 0 }));
+    c.t.push(h.thickness); c.sx += h.at[0]; c.sy += h.at[1]; c.sz += h.at[2]; c.area += h.area;
   }
-  const raw = [...cells.values()].map((c) => ({ thickness: c.min, at: [c.sx / c.n, c.sy / c.n, c.sz / c.n] as [number, number, number], area: c.area, n: c.n }));
+  const raw = [...cells.values()].map((c) => ({ t: c.t, at: [c.sx / c.t.length, c.sy / c.t.length, c.sz / c.t.length] as [number, number, number], area: c.area, low: Math.min(...c.t) }));
   // merge neighbouring cells into one region per thin feature
-  const regions: { thickness: number; sx: number; sy: number; sz: number; n: number; area: number; min: number[]; max: number[] }[] = [];
-  for (const c of raw.sort((a, b) => a.thickness - b.thickness)) {
+  const regions: { t: number[]; sx: number; sy: number; sz: number; area: number; min: number[]; max: number[] }[] = [];
+  for (const c of raw.sort((a, b) => a.low - b.low)) {
+    const n = c.t.length;
     const r = regions.find((g) => c.at.every((v, k) => v >= g.min[k] - 7.5 && v <= g.max[k] + 7.5));
     if (r) {
-      r.thickness = Math.min(r.thickness, c.thickness); r.sx += c.at[0] * c.n; r.sy += c.at[1] * c.n; r.sz += c.at[2] * c.n; r.n += c.n; r.area += c.area;
+      r.t.push(...c.t); r.sx += c.at[0] * n; r.sy += c.at[1] * n; r.sz += c.at[2] * n; r.area += c.area;
       for (let k = 0; k < 3; k++) { r.min[k] = Math.min(r.min[k], c.at[k]); r.max[k] = Math.max(r.max[k], c.at[k]); }
-    } else regions.push({ thickness: c.thickness, sx: c.at[0] * c.n, sy: c.at[1] * c.n, sz: c.at[2] * c.n, n: c.n, area: c.area, min: [...c.at], max: [...c.at] });
+    } else regions.push({ t: [...c.t], sx: c.at[0] * n, sy: c.at[1] * n, sz: c.at[2] * n, area: c.area, min: [...c.at], max: [...c.at] });
   }
+  // A region's thickness is a low percentile of its samples, not its single thinnest ray: on a faceted
+  // curved wall a few rays always land where facets meet, and one of them must not decide the verdict.
+  // Faceting also reads a curved wall a few hundredths thin (both faces sag between facet edges),
+  // hence the tolerance.
+  const TOL = 0.05;
   const spots = regions
-    .map((g) => ({ thickness: r2(g.thickness), at: r3([g.sx / g.n, g.sy / g.n, g.sz / g.n]), area: r1(g.area), min: r3(g.min), max: r3(g.max) }))
+    .map((g) => {
+      const t = [...g.t].sort((a, b) => a - b);
+      const typical = t[Math.min(t.length - 1, Math.floor(t.length * 0.2))];
+      return { thickness: r2(typical), thinnest: r2(t[0]), samples: t.length, at: r3([g.sx / t.length, g.sy / t.length, g.sz / t.length]), area: r1(g.area), min: r3(g.min), max: r3(g.max) };
+    })
+    .filter((s) => s.thickness < twoLines - TOL && (s.area >= 1 || s.samples >= 3))   // not specks (tessellation noise)
     .sort((a, b) => a.thickness - b.thickness);
-  const tooThin = spots.filter((s) => s.thickness < minLine);
-  const fragile = spots.filter((s) => s.thickness >= minLine);
+  // too few samples to be sure it is a wall and not a corner: at most a warning
+  const tooThin = spots.filter((s) => s.thickness < minLine && s.samples >= 3);
+  const fragile = spots.filter((s) => !tooThin.includes(s));
   const findings: Finding[] = spots.slice(0, 10).map((s) => ({
-    status: s.thickness < minLine ? "fail" : "warn",
-    message: `${s.thickness < minLine ? "Too thin to print" : "Thin wall"}: ${s.thickness} mm around (${s.at.join(", ")}), spanning z ${s.min[2]}–${s.max[2]} mm.`,
+    status: tooThin.includes(s) ? "fail" : "warn",
+    message: `${tooThin.includes(s) ? "Too thin to print" : "Thin wall"}: ${s.thickness} mm around (${s.at.join(", ")}), spanning z ${s.min[2]}–${s.max[2]} mm.`,
     at: s.at,
   }));
   const status = tooThin.length ? "fail" : fragile.length ? "warn" : "pass";

@@ -4,7 +4,7 @@ import RAPIER from "@dimforge/rapier3d-compat";
 import type { Part } from "./context.js";
 import { voxelize, greedyBoxes, type VoxelGrid } from "./voxel.js";
 import { type CheckResult, type Finding, type Status, r1, r2, r3, worst } from "./report.js";
-import { checkStrength, type StrengthData } from "./fea.js";
+import { checkStrength, scaleFea, type StrengthData } from "./fea.js";
 
 let ready: Promise<void> | null = null;
 export function initPhysics(): Promise<void> {
@@ -18,8 +18,20 @@ const G = 9810; // mm/s²
 const TO_N = 1e-6;
 
 export type FloorType = "concrete" | "tile" | "wood" | "carpet";
-/** impact contact duration (s) — softer floors stretch the impact and lower the peak force */
+/** impact contact duration (s) for a rigid plastic part — softer floors stretch the impact and lower the peak force */
 const CONTACT_TIME: Record<FloorType, number> = { concrete: 0.0008, tile: 0.001, wood: 0.002, carpet: 0.006 };
+/** stiffness (MPa) the contact times above are for: rigid printed plastics */
+const RIGID_E = 2500;
+/** below this stiffness (MPa) a part bends instead of breaking — TPU, TPE */
+const FLEXIBLE_E = 200;
+
+/**
+ * An impact lasts about as long as the part takes to squash and spring back, ∝ √(m/k): a part much
+ * softer than rigid plastic stretches the impact (TPU ~10×) and the peak deceleration drops as much.
+ */
+function contactTime(floor: FloorType, E: number): number {
+  return CONTACT_TIME[floor] * Math.max(1, Math.sqrt(RIGID_E / E));
+}
 
 export interface Frame { t: number; p: [number, number, number]; q: [number, number, number, number] }
 
@@ -235,7 +247,7 @@ export async function dropTest(part: Part, opts: DropOptions = {}): Promise<Chec
     const speed = impact?.speed ?? Math.sqrt(2 * 9.81 * (height / 1000));
     // peak deceleration of the body ≈ velocity change / contact time
     const dvBody = Math.max(impact?.dv ?? 0, speed * (1 + e) * 0.5);
-    const peakG = dvBody / CONTACT_TIME[floor] / 9.81;
+    const peakG = dvBody / contactTime(floor, part.material.youngsModulus) / 9.81;
     trials.push({
       start: [q0.x, q0.y, q0.z, q0.w].map((x) => +x.toFixed(4)) as DropTrial["start"],
       impactSpeed: r2(speed),
@@ -252,7 +264,13 @@ export async function dropTest(part: Part, opts: DropOptions = {}): Promise<Chec
   const findings: Finding[] = [];
   const statuses: Status[] = [];
   let impactStress: StrengthData | undefined;
-  if (opts.stress !== false) {
+  const flexible = part.material.youngsModulus < FLEXIBLE_E;
+  if (opts.stress !== false && flexible) {
+    // A linear stress check against tensile strength says nothing about a rubbery part: TPU stretches
+    // several times its length before tearing, so a drop that snaps PLA just bends it.
+    statuses.push("pass");
+    findings.push({ status: "pass", message: `${part.material.name} is flexible: it absorbs the impact by bending (~${worstTrial.peakG} g) rather than cracking — drops don't break flexible parts. Check instead that it doesn't deform too much in use.` });
+  } else if (opts.stress !== false) {
     // quasi-static impact: the floor holds the contact point, the rest of the part keeps moving
     const dir = [
       body.com[0] - worstTrial.impactPoint[0],
@@ -265,18 +283,43 @@ export async function dropTest(part: Part, opts: DropOptions = {}): Promise<Chec
     try {
       // contact patch: a few mm — a point contact would make the solve singular and slow
       const radius = Math.max(4, Math.max(part.bbox.size[0], part.bbox.size[1], part.bbox.size[2]) * 0.06);
-      // FEA works in design coordinates
-      const s = checkStrength(part, { fixed: [{ sphere: { center: part.toDesign(worstTrial.impactPoint), radius } }], loads: [], acceleration: part.dirToDesign(accel) }, { elements: 6000, tolerance: 1e-4, maxIterations: 1500, requiredSafety: 1.2 });
+      // FEA works in design coordinates. Coarse for speed on chunky parts; thin-walled parts refine
+      // (up to 60k elements) until the walls are in the model.
+      let flexNote: Finding | undefined;
+      const fixedPatch = [{ sphere: { center: part.toDesign(worstTrial.impactPoint), radius } }];
+      const opts = { elements: 6000, maxElements: 60000, tolerance: 1e-4, maxIterations: 3000, requiredSafety: 1.2 };
+      let s = checkStrength(part, { fixed: fixedPatch, loads: [], acceleration: part.dirToDesign(accel) }, opts);
+      // The rigid-body estimate assumes the whole part stops as fast as the contact point. A flexible part
+      // (a thin frame, a long arm) bends and stops more slowly. Treat it as a spring of the stiffness this
+      // solve measured: ½mv² = ½kδ² gives a peak force v·√(k·m), i.e. a peak acceleration v·√(a/δ), where
+      // δ is how far its centre of mass moved under acceleration a. Use that when it is lower.
+      const aVec = part.dirToDesign(accel);
+      const aLen = Math.hypot(...aVec) || 1;
+      const md = s.fea.meanDisplacement;
+      const deltaCom = Math.abs((md[0] * aVec[0] + md[1] * aVec[1] + md[2] * aVec[2]) / aLen) / 1000;   // m
+      const gFlex = deltaCom > 0 ? (worstTrial.impactSpeed * Math.sqrt((worstTrial.peakG * 9.81) / deltaCom)) / 9.81 : Infinity;
+      if (s.data.residual < 1e-3 && gFlex < worstTrial.peakG * 0.9) {
+        const f = gFlex / worstTrial.peakG;
+        flexNote = ({ status: "info", message: `The part flexes enough to soften the impact: it stops over ~${r1(deltaCom * 1000 * worstTrial.peakG / gFlex)} mm, so it feels ~${Math.round(gFlex)} g instead of the ${worstTrial.peakG} g a rigid part would.` });
+        worstTrial.peakG = Math.round(gFlex);
+        s = checkStrength(part, { fixed: fixedPatch, loads: [], acceleration: [aVec[0] * f, aVec[1] * f, aVec[2] * f] }, { ...opts, result: scaleFea(s.fea, f) });
+      }
       impactStress = s.data;
-      const st: Status = s.data.minSafetyFactor < 1 ? "fail" : s.data.minSafetyFactor < 1.5 ? "warn" : "pass";
-      statuses.push(st);
-      findings.push({
-        status: st,
-        message: st === "fail"
-          ? `Likely to break when landing on (${worstTrial.impactPoint.join(", ")}): safety factor ${s.data.minSafetyFactor}, weakest near (${s.data.weakestAt.join(", ")}).`
-          : `Survives the worst impact (${worstTrial.peakG} g) with safety factor ${s.data.minSafetyFactor}.`,
-        at: st === "fail" ? s.data.weakestAt : worstTrial.impactPoint,
-      });
+      if (!s.data.reliable) {
+        statuses.push("warn");
+        findings.push({ status: "warn", message: `Impact stress unreliable, so no verdict on breaking: ${s.data.unreliable.join("; ")}. Worst impact ${worstTrial.peakG} g landing on (${worstTrial.impactPoint.join(", ")}).`, at: worstTrial.impactPoint });
+      } else {
+        const st: Status = s.data.minSafetyFactor < 1 ? "fail" : s.data.minSafetyFactor < 1.5 ? "warn" : "pass";
+        statuses.push(st);
+        findings.push({
+          status: st,
+          message: st === "fail"
+            ? `Likely to break when landing on (${worstTrial.impactPoint.join(", ")}): safety factor ${s.data.minSafetyFactor}, weakest near (${s.data.weakestAt.join(", ")}).`
+            : `Survives the worst impact (${worstTrial.peakG} g) with safety factor ${s.data.minSafetyFactor}.`,
+          at: st === "fail" ? s.data.weakestAt : worstTrial.impactPoint,
+        });
+      }
+      if (flexNote) findings.push(flexNote);
     } catch (err) {
       findings.push({ status: "info", message: `Impact stress not computed: ${(err as Error).message}` });
     }

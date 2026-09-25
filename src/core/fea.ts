@@ -2,8 +2,9 @@
 // Stiffness is isotropic; strength is checked separately along layers (XY) and across layers (Z),
 // because FDM parts are much weaker when pulled apart between layers.
 import type { Part } from "./context.js";
-import { type VoxelGrid, voxelize, vIndex } from "./voxel.js";
+import { type VoxelGrid, voxelize, vIndex, countSolid } from "./voxel.js";
 import { type CheckResult, type Finding, r2, r3 } from "./report.js";
+import { multigrid } from "./mg.js";
 
 export type Region =
   | { face: "bottom" | "top" | "-x" | "+x" | "-y" | "+y"; depth?: number }
@@ -31,8 +32,21 @@ export interface LoadCase {
 export interface FeaOptions {
   /** target number of solid elements (speed vs accuracy); default 25k */
   elements?: number;
+  /**
+   * Element size in mm, instead of `elements`. Pin it to compare builds of a design: at a sharp inside
+   * corner the peak stress grows as elements shrink, so the same count on a slightly different part
+   * (a different element size) gives a different safety factor there.
+   */
+  elementSize?: number;
+  /**
+   * The grid is refined past `elements` when it misses too much of the part (walls thinner than an
+   * element), up to this many elements. Default max(elements, 60k).
+   */
+  maxElements?: number;
   maxIterations?: number;
   tolerance?: number;
+  /** "multigrid" (default) converges in tens of iterations; "jacobi" is the simple fallback */
+  preconditioner?: "multigrid" | "jacobi";
 }
 
 export interface FeaResult {
@@ -47,6 +61,12 @@ export interface FeaResult {
   maxDisplacementAt: [number, number, number];
   iterations: number;
   converged: boolean;
+  /** final relative residual |f − Ku| / |f| */
+  residual: number;
+  /** share of the part's volume the element grid holds (≈ 1 when every wall is resolved) */
+  captured: number;
+  /** average displacement of the part's material (mm): how far its centre of mass moves under the load */
+  meanDisplacement: [number, number, number];
   droppedElements: number;
   /** force needed for each prescribed displacement, N (x, y, z) */
   reactions: { move: [number, number, number]; force: [number, number, number]; nodes: number }[];
@@ -115,87 +135,114 @@ function unitStiffness(nu: number): Float64Array {
 
 // ---------- solver ----------
 
+const TRACE = typeof process !== "undefined" && !!process.env?.PHYX3D_TRACE;
+const FACE_NB = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]] as const;
+
 export function solveFea(part: Part, lc: LoadCase, opts: FeaOptions = {}): FeaResult {
   const target = opts.elements ?? 25000;
-  const size = Math.max(0.25, Math.cbrt(part.mass.volume / target));
+  const maxEl = opts.maxElements ?? Math.max(target, 60000);
+  let size = opts.elementSize ?? Math.max(0.2, Math.cbrt(part.mass.volume / target));
   // strength runs on the design pose: loads/fixtures stay attached to the design whatever the print orientation
-  const grid = voxelize(part.designMesh, +size.toFixed(4));
-  const [bnx, bny, bnz] = part.buildDir;
-  const { nx, ny, nz } = grid;
-  const h = grid.size;
-  const mat = part.material;
-  const E = mat.youngsModulus;
-  const Ku = unitStiffness(mat.poisson);
-  const NX = nx + 1, NY = ny + 1;
-  const nodeId = (i: number, j: number, k: number) => i + NX * (j + NY * k);
-  const nodePos = (n: number): [number, number, number] => {
-    const i = n % NX, j = Math.floor(n / NX) % NY, k = Math.floor(n / (NX * NY));
-    return [grid.origin[0] + i * h, grid.origin[1] + j * h, grid.origin[2] + k * h];
-  };
+  const buildModel = (grid: VoxelGrid) => {
+    const [bnx, bny, bnz] = part.buildDir;
+    const { nx, ny, nz } = grid;
+    const h = grid.size;
+    const mat = part.material;
+    const E = mat.youngsModulus;
+    const Ku = unitStiffness(mat.poisson);
+    const NX = nx + 1, NY = ny + 1;
+    const nodeId = (i: number, j: number, k: number) => i + NX * (j + NY * k);
+    const nodePos = (n: number): [number, number, number] => {
+      const i = n % NX, j = Math.floor(n / NX) % NY, k = Math.floor(n / (NX * NY));
+      return [grid.origin[0] + i * h, grid.origin[1] + j * h, grid.origin[2] + k * h];
+    };
 
-  // element list with their 8 node ids
-  const elemVox: number[] = [];
-  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (grid.data[vIndex(grid, i, j, k)]) elemVox.push(vIndex(grid, i, j, k));
-  const elemNodes = (v: number): number[] => {
-    const i = v % nx, j = Math.floor(v / nx) % ny, k = Math.floor(v / (nx * ny));
-    return [nodeId(i, j, k), nodeId(i + 1, j, k), nodeId(i + 1, j + 1, k), nodeId(i, j + 1, k), nodeId(i, j, k + 1), nodeId(i + 1, j, k + 1), nodeId(i + 1, j + 1, k + 1), nodeId(i, j + 1, k + 1)];
-  };
+    // element list with their 8 node ids
+    const elemVox: number[] = [];
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (grid.data[vIndex(grid, i, j, k)]) elemVox.push(vIndex(grid, i, j, k));
+    const elemNodes = (v: number): number[] => {
+      const i = v % nx, j = Math.floor(v / nx) % ny, k = Math.floor(v / (nx * ny));
+      return [nodeId(i, j, k), nodeId(i + 1, j, k), nodeId(i + 1, j + 1, k), nodeId(i, j + 1, k), nodeId(i, j, k + 1), nodeId(i + 1, j, k + 1), nodeId(i + 1, j + 1, k + 1), nodeId(i, j + 1, k + 1)];
+    };
 
-  // active nodes
-  const totalNodes = NX * NY * (nz + 1);
-  const used = new Uint8Array(totalNodes);
-  for (const v of elemVox) for (const n of elemNodes(v)) used[n] = 1;
-  const activeNodes: number[] = [];
-  for (let n = 0; n < totalNodes; n++) if (used[n]) activeNodes.push(n);
-  let zMin = Infinity, zMax = -Infinity, xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
-  for (const n of activeNodes) {
-    const [x, y, z] = nodePos(n);
-    zMin = Math.min(zMin, z); zMax = Math.max(zMax, z);
-    xMin = Math.min(xMin, x); xMax = Math.max(xMax, x);
-    yMin = Math.min(yMin, y); yMax = Math.max(yMax, y);
-  }
-  const inRegion = (r: Region, p: [number, number, number]): boolean => {
-    if ("face" in r) {
-      const d = Math.max(r.depth ?? 0, h * 0.5);
-      switch (r.face) {
-        case "bottom": return p[2] <= zMin + d;
-        case "top": return p[2] >= zMax - d;
-        case "-x": return p[0] <= xMin + d;
-        case "+x": return p[0] >= xMax - d;
-        case "-y": return p[1] <= yMin + d;
-        case "+y": return p[1] >= yMax - d;
+    // active nodes
+    const totalNodes = NX * NY * (nz + 1);
+    const used = new Uint8Array(totalNodes);
+    for (const v of elemVox) for (const n of elemNodes(v)) used[n] = 1;
+    const activeNodes: number[] = [];
+    for (let n = 0; n < totalNodes; n++) if (used[n]) activeNodes.push(n);
+    let zMin = Infinity, zMax = -Infinity, xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+    for (const n of activeNodes) {
+      const [x, y, z] = nodePos(n);
+      zMin = Math.min(zMin, z); zMax = Math.max(zMax, z);
+      xMin = Math.min(xMin, x); xMax = Math.max(xMax, x);
+      yMin = Math.min(yMin, y); yMax = Math.max(yMax, y);
+    }
+    const inRegion = (r: Region, p: [number, number, number]): boolean => {
+      if ("face" in r) {
+        const d = Math.max(r.depth ?? 0, h * 0.5);
+        switch (r.face) {
+          case "bottom": return p[2] <= zMin + d;
+          case "top": return p[2] >= zMax - d;
+          case "-x": return p[0] <= xMin + d;
+          case "+x": return p[0] >= xMax - d;
+          case "-y": return p[1] <= yMin + d;
+          case "+y": return p[1] >= yMax - d;
+        }
+      }
+      if ("box" in r) {
+        const e = h * 0.5;
+        return [0, 1, 2].every((i) => p[i] >= r.box.min[i] - e && p[i] <= r.box.max[i] + e);
+      }
+      if ("rel" in r) {
+        const lo = [xMin, yMin, zMin], hi = [xMax, yMax, zMax];
+        const e = h * 0.5;
+        return [0, 1, 2].every((i) => p[i] >= lo[i] + r.rel.min[i] * (hi[i] - lo[i]) - e && p[i] <= lo[i] + r.rel.max[i] * (hi[i] - lo[i]) + e);
+      }
+      const c = r.sphere.center;
+      return Math.hypot(p[0] - c[0], p[1] - c[1], p[2] - c[2]) <= r.sphere.radius + h * 0.5;
+    };
+
+    const fixedNode = new Uint8Array(totalNodes);
+    let nFixed = 0;
+    for (const n of activeNodes) if (lc.fixed.some((r) => inRegion(r, nodePos(n)))) { fixedNode[n] = 1; nFixed++; }
+    if (!nFixed) throw new Error("No part of the model lies in the 'fixed' region — nothing holds the part.");
+
+    // Drop elements not joined to the fixed region through shared FACES. Voxels that touch only along an
+    // edge or at a corner are hinges: they make K singular (the "deflection" runs to 1e10 mm) and stall the solver.
+    const elemAt = new Int32Array(nx * ny * nz).fill(-1);
+    elemVox.forEach((v, e) => { elemAt[v] = e; });
+    const reached = new Uint8Array(elemVox.length);
+    const queue: number[] = [];
+    // held = at least 3 of its nodes fixed (no 3 corners of a cube are in line); fewer is a hinge
+    elemVox.forEach((v, e) => { if (elemNodes(v).filter((n) => fixedNode[n]).length >= 3) { reached[e] = 1; queue.push(e); } });
+    while (queue.length) {
+      const v = elemVox[queue.pop()!];
+      const i = v % nx, j = Math.floor(v / nx) % ny, k = Math.floor(v / (nx * ny));
+      for (const [di, dj, dk] of FACE_NB) {
+        const a = i + di, b = j + dj, c = k + dk;
+        if (a < 0 || b < 0 || c < 0 || a >= nx || b >= ny || c >= nz) continue;
+        const e2 = elemAt[vIndex(grid, a, b, c)];
+        if (e2 >= 0 && !reached[e2]) { reached[e2] = 1; queue.push(e2); }
       }
     }
-    if ("box" in r) {
-      const e = h * 0.5;
-      return [0, 1, 2].every((i) => p[i] >= r.box.min[i] - e && p[i] <= r.box.max[i] + e);
-    }
-    if ("rel" in r) {
-      const lo = [xMin, yMin, zMin], hi = [xMax, yMax, zMax];
-      const e = h * 0.5;
-      return [0, 1, 2].every((i) => p[i] >= lo[i] + r.rel.min[i] * (hi[i] - lo[i]) - e && p[i] <= lo[i] + r.rel.max[i] * (hi[i] - lo[i]) + e);
-    }
-    const c = r.sphere.center;
-    return Math.hypot(p[0] - c[0], p[1] - c[1], p[2] - c[2]) <= r.sphere.radius + h * 0.5;
+    const elements = elemVox.filter((_, e) => reached[e]);
+    const dropped = elemVox.length - elements.length;
+    return { bnx, bny, bnz, nx, ny, nz, h, mat, E, Ku, NX, NY, nodeId, nodePos, elemNodes, totalNodes, activeNodes, inRegion, fixedNode, elements, dropped };
   };
-
-  const fixedNode = new Uint8Array(totalNodes);
-  let nFixed = 0;
-  for (const n of activeNodes) if (lc.fixed.some((r) => inRegion(r, nodePos(n)))) { fixedNode[n] = 1; nFixed++; }
-  if (!nFixed) throw new Error("No part of the model lies in the 'fixed' region — nothing holds the part.");
-
-  // drop elements not connected to a fixed node (they would float and make K singular)
-  const nodeElems = new Map<number, number[]>();
-  elemVox.forEach((v, e) => { for (const n of elemNodes(v)) { let l = nodeElems.get(n); if (!l) nodeElems.set(n, (l = [])); l.push(e); } });
-  const reached = new Uint8Array(elemVox.length);
-  const queue: number[] = [];
-  for (const n of activeNodes) if (fixedNode[n]) for (const e of nodeElems.get(n)!) if (!reached[e]) { reached[e] = 1; queue.push(e); }
-  while (queue.length) {
-    const e = queue.pop()!;
-    for (const n of elemNodes(elemVox[e])) for (const e2 of nodeElems.get(n)!) if (!reached[e2]) { reached[e2] = 1; queue.push(e2); }
+  // Walls thinner than an element vanish from a voxel grid, or turn into chains of voxels touching only
+  // at edges, which are hinges and get dropped. Either way the model left over is not the part: refine
+  // until the connected model holds the part's volume.
+  let grid = voxelize(part.designMesh, +size.toFixed(4));
+  let M = buildModel(grid);
+  const keptShare = () => (M.elements.length * M.h ** 3) / Math.max(part.mass.volume, 1e-9);
+  while (!opts.elementSize && Math.abs(keptShare() - 1) > 0.12 && size > 0.2 && countSolid(grid) / 0.75 ** 3 <= maxEl) {
+    size *= 0.75;
+    grid = voxelize(part.designMesh, +size.toFixed(4));
+    M = buildModel(grid);
   }
-  const elements = elemVox.filter((_, e) => reached[e]);
-  const dropped = elemVox.length - elements.length;
+  const captured = keptShare();
+  const { bnx, bny, bnz, nx, ny, nz, h, mat, E, Ku, NX, NY, nodeId, nodePos, elemNodes, totalNodes, inRegion, fixedNode, elements, dropped } = M;
 
   // compact dof numbering
   const dofOf = new Int32Array(totalNodes).fill(-1);
@@ -288,22 +335,32 @@ export function solveFea(part: Part, lc: LoadCase, opts: FeaOptions = {}): FeaRe
   }
 
   // PCG
+  const jacobi = (rr: Float64Array, zz: Float64Array) => { for (let i = 0; i < ndof; i++) zz[i] = rr[i] * invD[i]; };
+  let precond = jacobi;
+  if ((opts.preconditioner ?? "multigrid") === "multigrid") {
+    const mg = multigrid({ nx, ny, nz, elems: elements, scale: new Float64Array(elements.length).fill(scale), nodeDof: dofOf, fixed: fixedDof, Ke });
+    if (TRACE) console.error("mg levels", mg.levels, "omega", mg.omegas);
+    precond = mg.apply;
+  }
   const u = new Float64Array(ndof);
   const r = Float64Array.from(f);
-  const z = r.map((v, i) => v * invD[i]);
+  const z = new Float64Array(ndof);
+  precond(r, z);
   const pdir = Float64Array.from(z);
   const Ap = new Float64Array(ndof);
   let rz = dot(r, z);
   const fNorm = Math.sqrt(dot(f, f)) || 1;
   const tol = opts.tolerance ?? 1e-6;
   const maxIt = opts.maxIterations ?? 10000;
-  let it = 0, converged = false;
+  let it = 0, converged = false, residual = 1;
   for (; it < maxIt; it++) {
     matvec(pdir, Ap);
     const alpha = rz / (dot(pdir, Ap) || 1e-300);
     for (let i = 0; i < ndof; i++) { u[i] += alpha * pdir[i]; r[i] -= alpha * Ap[i]; }
-    if (Math.sqrt(dot(r, r)) / fNorm < tol) { converged = true; it++; break; }
-    for (let i = 0; i < ndof; i++) z[i] = r[i] * invD[i];
+    residual = Math.sqrt(dot(r, r)) / fNorm;
+    if (TRACE && it % 500 === 0) console.error("it", it, residual.toExponential(2));
+    if (residual < tol) { converged = true; it++; break; }
+    precond(r, z);
     const rzNew = dot(r, z);
     const beta = rzNew / rz;
     rz = rzNew;
@@ -348,10 +405,15 @@ export function solveFea(part: Part, lc: LoadCase, opts: FeaOptions = {}): FeaRe
     }
     vm[e] = maxVm;
     sz[e] = maxSz;
-    const sfXY = (mat.tensileXY * knock) / Math.max(maxVm, 1e-9);
-    const sfZ = (mat.tensileZ * knock) / Math.max(maxSz, 1e-9);
+  }
+  for (let e = 0; e < elements.length; e++) {
+    const sfXY = (mat.tensileXY * knock) / Math.max(vm[e], 1e-9);
+    const sfZ = (mat.tensileZ * knock) / Math.max(sz[e], 1e-9);
     sf[e] = Math.min(sfXY, sfZ, 999);
   }
+  const meanU: [number, number, number] = [0, 0, 0];
+  for (let e = 0; e < elements.length; e++) for (let a = 0; a < 8; a++) for (let d = 0; d < 3; d++) meanU[d] += u[edofs[e * 24 + a * 3 + d]] / 8;
+  for (let d = 0; d < 3; d++) meanU[d] /= Math.max(1, elements.length);
   let maxU = 0, maxUAt = 0;
   for (let i = 0; i < nNodes; i++) {
     const d = Math.hypot(u[i * 3], u[i * 3 + 1], u[i * 3 + 2]);
@@ -367,6 +429,9 @@ export function solveFea(part: Part, lc: LoadCase, opts: FeaOptions = {}): FeaRe
     maxDisplacementAt: nodePos(maxUAt),
     iterations: it,
     converged,
+    residual,
+    captured,
+    meanDisplacement: meanU,
     droppedElements: dropped,
     reactions,
   };
@@ -406,14 +471,36 @@ export type StrengthData = {
   elementSize: number;
   iterations: number;
   converged: boolean;
+  /** final relative residual of the solve; below ~1e-3 the answer no longer changes */
+  residual: number;
+  /** share of the part's volume the element grid holds */
+  captured: number;
+  /** false when the numbers can't be trusted — see `unreliable` for why */
+  reliable: boolean;
+  unreliable: string[];
   strengthKnockdown: number;
   hotspots: { at: [number, number, number]; safety: number; mode: string }[];
   /** force it takes to push each prescribed displacement, N */
   pushForces: { move: [number, number, number]; forceN: number }[];
 };
 
-export function checkStrength(part: Part, lc: LoadCase, opts: FeaOptions & { requiredSafety?: number } = {}): CheckResult<StrengthData> & { fea: FeaResult } {
-  const res = solveFea(part, lc, opts);
+/** The same solve under a load scaled by `f`: the model is linear, so stress and displacement scale with it. */
+export function scaleFea(res: FeaResult, f: number): FeaResult {
+  const sc = (a: [number, number, number]) => a.map((v) => v * f) as [number, number, number];
+  return {
+    ...res,
+    vonMises: res.vonMises.map((v) => v * f),
+    sigmaZ: res.sigmaZ.map((v) => v * f),
+    safety: res.safety.map((v) => Math.min(999, v / f)),
+    maxDisplacement: res.maxDisplacement * f,
+    meanDisplacement: sc(res.meanDisplacement),
+    reactions: res.reactions.map((r) => ({ ...r, force: sc(r.force) })),
+  };
+}
+
+/** `opts.result`: judge an existing solve (e.g. one rescaled with scaleFea) instead of solving again. */
+export function checkStrength(part: Part, lc: LoadCase, opts: FeaOptions & { requiredSafety?: number; result?: FeaResult } = {}): CheckResult<StrengthData> & { fea: FeaResult } {
+  const res = opts.result ?? solveFea(part, lc, opts);
   const need = opts.requiredSafety ?? 2;
   const mat = part.material;
   const knock = strengthKnockdown(part);
@@ -431,7 +518,15 @@ export function checkStrength(part: Part, lc: LoadCase, opts: FeaOptions & { req
   let maxVm = 0, maxSz = 0;
   for (let e = 0; e < res.elements.length; e++) { maxVm = Math.max(maxVm, res.vonMises[e]); maxSz = Math.max(maxSz, res.sigmaZ[e]); }
   const sfMin = weakest?.safety ?? 999;
-  const status = !res.converged ? "warn" : sfMin < 1 ? "fail" : sfMin < need ? "warn" : "pass";
+  // Say plainly when the answer can't be trusted, instead of passing or failing the part on it.
+  const unreliable: string[] = [];
+  const size = Math.max(...part.bbox.size);
+  if (!res.converged && res.residual > 1e-3) unreliable.push(`the solver stopped after ${res.iterations} iterations without converging (residual ${res.residual.toExponential(1)})`);
+  if (Math.abs(res.captured - 1) > 0.2) unreliable.push(`the ${r2(res.grid.size)} mm element grid holds only ${Math.round(res.captured * 100)} % of the part's volume (walls thinner than ~${r2(res.grid.size * 2)} mm are not resolved)`);
+  if (res.maxDisplacement > 0.1 * size) unreliable.push(`it bends ${res.maxDisplacement > 1e4 ? "without limit" : `${r2(res.maxDisplacement)} mm`}, more than 10 % of its size — beyond what a linear model can describe (a flexible material, or part of the model hanging by a thread)`);
+  if (res.droppedElements > 0.05 * (res.elements.length + res.droppedElements)) unreliable.push(`${res.droppedElements} of ${res.elements.length + res.droppedElements} elements are not joined to the fixed region`);
+  const reliable = unreliable.length === 0;
+  const status = !reliable ? "warn" : sfMin < 1 ? "fail" : sfMin < need ? "warn" : "pass";
   const findings: Finding[] = hotspots.map((h) => ({
     status: h.safety < 1 ? "fail" : h.safety < need ? "warn" : "pass",
     message: `Safety factor ${h.safety} at (${h.at.join(", ")}) — ${h.mode === "across-layers" ? "layers would split apart here" : "material would yield/crack here"}.`,
@@ -442,7 +537,8 @@ export function checkStrength(part: Part, lc: LoadCase, opts: FeaOptions & { req
     const F = Math.abs((r.force[0] * r.move[0] + r.force[1] * r.move[1] + r.force[2] * r.move[2]) / L);
     findings.push({ status: "info", message: `Pushing ${r.move.map((v) => r2(v)).join(", ")} mm takes about ${r2(F)} N (${r2(F / 9.81)} kgf).` });
   }
-  if (!res.converged) findings.push({ status: "warn", message: `Solver stopped after ${res.iterations} iterations without full convergence; numbers are approximate — try a lower resolution.` });
+  if (!reliable) findings.unshift({ status: "warn", message: `Unreliable result: ${unreliable.join("; ")}.` });
+  else if (!res.converged) findings.push({ status: "info", message: `Solver stopped after ${res.iterations} iterations at residual ${res.residual.toExponential(1)}; close enough that the numbers hold.` });
   if (res.droppedElements) findings.push({ status: "info", message: `${res.droppedElements} voxels not connected to the fixed region were ignored.` });
   const fixes: string[] = [];
   if (status !== "pass") {
@@ -455,7 +551,7 @@ export function checkStrength(part: Part, lc: LoadCase, opts: FeaOptions & { req
     id: "strength",
     title: "Strength under load",
     status,
-    summary: `Minimum safety factor ${r2(sfMin)} (need ≥ ${need}) — ${weakest?.mode === "across-layers" ? "limited by layer adhesion" : "limited by material strength"}; max deflection ${r2(res.maxDisplacement)} mm${res.reactions.length ? `; pushing it takes ${res.reactions.map((r) => { const L = Math.hypot(...r.move) || 1; return `${r2(Math.abs((r.force[0] * r.move[0] + r.force[1] * r.move[1] + r.force[2] * r.move[2]) / L))} N`; }).join(" + ")}` : ""}.`,
+    summary: `${reliable ? "" : `UNRELIABLE (${unreliable.map((u) => u.split(" (")[0]).join("; ")}) — `}Minimum safety factor ${r2(sfMin)} (need ≥ ${need}) — ${weakest?.mode === "across-layers" ? "limited by layer adhesion" : "limited by material strength"}; max deflection ${r2(res.maxDisplacement)} mm${res.reactions.length ? `; pushing it takes ${res.reactions.map((r) => { const L = Math.hypot(...r.move) || 1; return `${r2(Math.abs((r.force[0] * r.move[0] + r.force[1] * r.move[1] + r.force[2] * r.move[2]) / L))} N`; }).join(" + ")}` : ""}.`,
     accuracy: "rough-guide",
     findings,
     fixes,
@@ -471,6 +567,10 @@ export function checkStrength(part: Part, lc: LoadCase, opts: FeaOptions & { req
       elementSize: r2(res.grid.size),
       iterations: res.iterations,
       converged: res.converged,
+      residual: +res.residual.toExponential(2),
+      captured: r2(res.captured),
+      reliable,
+      unreliable,
       strengthKnockdown: r2(knock),
       hotspots,
       pushForces: res.reactions.map((r) => {

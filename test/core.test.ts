@@ -5,6 +5,9 @@ import { voxelize, countSolid } from "../src/core/voxel.js";
 import { checkOverhangs, checkIslands, checkThinWalls } from "../src/core/printability.js";
 import { checkStability } from "../src/core/stability.js";
 import { checkStrength } from "../src/core/fea.js";
+import { parseSTL } from "../src/core/loaders.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 describe("mesh", () => {
   it("box volume, COM, watertight", () => {
@@ -60,6 +63,17 @@ describe("printability", () => {
     const fin = extrude([[0, 0], [0.5, 0], [0.5, 20], [0, 20]], 15); // 0.5 mm wall
     const r = checkThinWalls(new Part(fin));
     expect(r.status).not.toBe("pass");
+    const tooThin = checkThinWalls(new Part(extrude([[0, 0], [0.3, 0], [0.3, 20], [0, 20]], 15)));
+    expect(tooThin.status).toBe("fail");
+    expect((tooThin.data.spots as { thickness: number }[])[0].thickness).toBeCloseTo(0.3, 2);
+  });
+  it("a 0.84 mm curved wall with windows cut through it passes (no grazing rays at the window edges)", () => {
+    const r = checkThinWalls(new Part(parseSTL(new Uint8Array(readFileSync(join(__dirname, "fixtures", "duct_084.stl"))))));
+    expect(r.status).toBe("pass");
+  });
+  it("a sharp undercut edge is an edge, not a thin wall", () => {
+    const r = checkThinWalls(new Part(parseSTL(new Uint8Array(readFileSync(join(__dirname, "fixtures", "chamfered_lid.stl"))))));
+    expect(r.status).toBe("pass");
   });
 });
 
@@ -96,6 +110,33 @@ describe("strength (FEA)", () => {
     expect(r.data.maxVonMises / 6).toBeGreaterThan(0.75);
     expect(r.data.maxVonMises / 6).toBeLessThan(1.6);
   });
+  it("multigrid and Jacobi give the same answer; multigrid in far fewer iterations", () => {
+    const part = new Part(box(100, 10, 10), { material: "PLA", settings: { infill: 1 } });
+    const lc = { fixed: [{ face: "-x" as const }], loads: [{ region: { face: "+x" as const }, force: [0, 0, -10] as [number, number, number] }] };
+    const mg = checkStrength(part, lc, { elements: 8000 });
+    const jac = checkStrength(part, lc, { elements: 8000, preconditioner: "jacobi" });
+    expect(mg.data.maxDeflection).toBeCloseTo(jac.data.maxDeflection, 2);
+    expect(mg.data.minSafetyFactor).toBeCloseTo(jac.data.minSafetyFactor, 1);
+    expect(mg.data.iterations).toBeLessThan(jac.data.iterations / 5);
+    expect(mg.data.reliable).toBe(true);
+  });
+  it("thin walls: the grid refines until the model holds the part, and the result is trusted", () => {
+    // 0.84 mm duct wall: at the 25k-element default size (~1 mm) the wall would fall between voxels
+    const part = new Part(parseSTL(new Uint8Array(readFileSync(join(__dirname, "fixtures", "duct_084.stl")))), { material: "PLA" });
+    const r = checkStrength(part, { fixed: [{ face: "bottom" }], loads: [{ region: { face: "top" }, force: [5, 0, 0] }] }, { elements: 3000, maxElements: 60000 });
+    expect(r.data.captured).toBeGreaterThan(0.8);
+    expect(r.data.elementSize).toBeLessThan(0.84);   // finer than the wall
+    expect(r.data.maxDeflection).toBeLessThan(5);
+    expect(r.data.reliable).toBe(true);
+  }, 120000);
+  it("flags a result it can't trust instead of failing the part", () => {
+    // pinned coarse elements on a 0.84 mm wall: the grid can't hold the part
+    const part = new Part(parseSTL(new Uint8Array(readFileSync(join(__dirname, "fixtures", "duct_084.stl")))), { material: "PLA" });
+    const r = checkStrength(part, { fixed: [{ face: "bottom" }], loads: [{ region: { face: "top" }, force: [5, 0, 0] }] }, { elementSize: 1.5 });
+    expect(r.data.reliable).toBe(false);
+    expect(r.status).toBe("warn");
+    expect(r.summary).toMatch(/^UNRELIABLE/);
+  }, 120000);
   it("pushing the tip a set distance reports the force it takes (F = 3EIδ/L³)", () => {
     // snap-arm style test: displace the free end by the deflection 10 N would cause → reaction ≈ 10 N
     const part = new Part(box(100, 10, 10), { material: "PLA", settings: { infill: 1 } });

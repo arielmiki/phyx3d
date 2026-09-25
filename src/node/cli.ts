@@ -99,6 +99,7 @@ common(program.command("stress <file>").description("strength test: hold the par
   .option("--move <spec...>", "region=dx,dy,dz mm: push a region a set distance (snap/detent/clip travel); reports the force it takes")
   .option("--safety <n>", "required safety factor", "2")
   .option("--elements <n>", "FE resolution (solid voxels)", "25000")
+  .option("--element-size <mm>", "fix the element size instead (compare builds of a design at the same resolution)")
   .option("--png <file>", "save the stress picture")
   .action(async (file: string, o) => {
     const f = loadPath(file);
@@ -111,7 +112,7 @@ common(program.command("stress <file>").description("strength test: hold the par
     };
     if (!lc.loads.length && !lc.displacements!.length && !lc.acceleration) throw new Error("Give at least one --force, --move or --accel.");
     const t0 = Date.now();
-    const s = checkStrength(part, lc, { requiredSafety: +o.safety, elements: +o.elements });
+    const s = checkStrength(part, lc, { requiredSafety: +o.safety, elements: +o.elements, elementSize: o.elementSize ? +o.elementSize : undefined });
     const { fea, ...check } = s;
     const report = buildReport(part, [check]);
     const img = renderReport(part, report, "stress", fea);

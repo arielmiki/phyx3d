@@ -5,6 +5,31 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-25
+
+### Fixed
+- **Strength solver on thin-walled parts:**
+  - Walls thinner than an element no longer vanish: the grid refines until the model holds the part's volume.
+  - Voxels touching only at an edge or corner are no longer treated as joined. They made the solve singular
+    (deflections of 10¹⁰ mm).
+  - Results that can't be trusted are flagged as unreliable in the status and summary instead of passing or
+    failing the part: unconverged, under-resolved, or bending more than 10 % of the part's size.
+- **Drop test:**
+  - Impact stress on thin-walled parts is now resolved properly.
+  - Soft materials stretch the impact; TPU no longer scores worse than PLA.
+  - Flexible parts are credited with softening their own impact.
+  - Flexible materials such as TPU are not judged against tensile strength.
+- **Wall thickness:**
+  - No more false "too thin" readings beside corners, window cut-outs and chamfered edges: rays that graze the
+    far face are ignored.
+  - Identical curved walls now report the same thickness.
+
+### Changed
+- The strength solver uses a geometric-multigrid preconditioner. It converges in about 20–600 iterations instead
+  of 400–10 000, and the same answers come several times faster.
+- New `--element-size` (CLI) and `element_size` (MCP `stress_test`) options fix the element size, so builds of a
+  design are compared at the same resolution. At sharp inside corners the peak stress depends on element size.
+
 ## [0.2.1] - 2026-09-24
 
 ### Fixed
@@ -60,7 +85,8 @@ First public release.
 - Package builds itself when run from GitHub (`npx -y github:arielmiki/phyx3d`) and before publishing.
 - Release workflow: pushing a `v*` tag publishes to npm via trusted publishing (OIDC), with provenance.
 
-[Unreleased]: https://github.com/arielmiki/phyx3d/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/arielmiki/phyx3d/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/arielmiki/phyx3d/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/arielmiki/phyx3d/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/arielmiki/phyx3d/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/arielmiki/phyx3d/compare/v0.1.0...v0.1.1

@@ -34,6 +34,14 @@ describe("physics", () => {
     expect(r.data.worst.impactSpeed).toBeGreaterThan(4);
     expect(r.data.worst.impactSpeed).toBeLessThan(5.5);
   }, 120000);
+  it("a soft part feels a gentler impact, and a flexible material is not judged as brittle", async () => {
+    const T = extrudeXZ([[20, 0], [30, 0], [30, 30], [50, 30], [50, 40], [0, 40], [0, 30], [20, 30]], 10);
+    const pla = await dropTest(new Part(T, { material: "PLA" }), { trials: 3, height: 1000 });
+    const tpu = await dropTest(new Part(T, { material: "TPU" }), { trials: 3, height: 1000 });
+    expect(tpu.data.worst.peakG).toBeLessThan(pla.data.worst.peakG / 4);   // contact time ∝ √(E_rigid/E)
+    expect(tpu.status).toBe("pass");
+    expect(tpu.data.impactStress).toBeUndefined();
+  }, 120000);
   it("stack of cubes holds", async () => {
     const r = await stackTest(new Part(box(20, 20, 10)), { count: 3 });
     console.log("stack", r.summary);

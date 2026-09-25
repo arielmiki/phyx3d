@@ -85,7 +85,8 @@ server.registerTool(
       displacements: z.array(z.object({ region, move: vec3.describe("Distance in mm [dx,dy,dz] the region is pushed") })).optional()
         .describe("Push a region a set distance instead of a force: use for snap arms, detents and clips (their travel is fixed by the geometry). Reports the force it takes (pushForces, N) and the safety factor at that travel."),
       required_safety: z.number().optional().describe("Required safety factor (default 2)"),
-      resolution: z.number().int().min(2000).max(120000).optional().describe("Number of finite elements (default 25000; more = slower, finer)"),
+      resolution: z.number().int().min(2000).max(200000).optional().describe("Number of finite elements (default 25000; more = slower, finer). Thin walls refine automatically."),
+      element_size: z.number().min(0.1).max(10).optional().describe("Element size in mm, instead of resolution. Pin it when comparing builds of the same design: at sharp inside corners the peak stress depends on element size, so a fixed element COUNT on a slightly changed part gives a different safety factor."),
     },
   },
   async (a) => {
@@ -93,7 +94,7 @@ server.registerTool(
       const f = loadPath(a.path);
       const part = new Part(requireMesh(f), partOpts(a));
       const lc: LoadCase = { fixed: a.fixed, loads: a.loads ?? [], acceleration: a.acceleration, displacements: a.displacements };
-      const s = checkStrength(part, lc, { requiredSafety: a.required_safety, elements: a.resolution });
+      const s = checkStrength(part, lc, { requiredSafety: a.required_safety, elements: a.resolution, elementSize: a.element_size });
       const { fea, ...check } = s;
       const img = renderReport(part, buildReport(part, [check]), "stress", fea);
       saveRun("stress", f.name, part.mesh, compactCheck(check), { stress: img.png });
